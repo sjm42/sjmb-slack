@@ -4,7 +4,6 @@ use chrono::*;
 use futures::TryStreamExt;
 use log::*;
 use sqlx::{Connection, SqliteConnection};
-
 use tokio::time::{sleep, Duration};
 
 const RETRY_CNT: usize = 5;

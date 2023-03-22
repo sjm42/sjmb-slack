@@ -1,0 +1,11 @@
+{
+    "url_regex": "<(https?://[^>]+)>",
+    "url_log_db": "$HOME/sjmb_slack/data/urllog.db",
+    "workspaces": [
+        {
+            "name": "foo",
+            "api_token": "abc-123",
+            "socket_token": "xyz-321"
+        }
+    ]
+}

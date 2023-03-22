@@ -13,7 +13,7 @@ pub struct OptsCommon {
     #[structopt(short, long)]
     pub trace: bool,
 
-    #[structopt(short, long, default_value = "$HOME/sjmb-slack/config/sjmb-slack.json")]
+    #[structopt(short, long, default_value = "$HOME/sjmb_slack/config/sjmb_slack.json")]
     pub bot_config: String,
 }
 
