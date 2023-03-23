@@ -51,7 +51,7 @@ impl Bot {
         bot.url_re = Some(Regex::new(&bot.url_regex)?);
 
         for ws in bot.workspaces.iter() {
-            info!("SlackBot::new(): ws {}", ws.name);
+            info!("SlackBot::new(): WS {}", ws.name);
             let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()));
 
             let api_token = SlackApiToken::new(ws.api_token.clone().into());
