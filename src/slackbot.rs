@@ -114,11 +114,7 @@ impl Bot {
         let bot = Arc::new(self.clone());
         let (tx, rx) = mpsc::unbounded_channel::<(Arc<Bot>, SlackMessageEvent)>();
 
-        handles.push(tokio::spawn(async move {
-            if let Err(e) = handle_messages(rx).await {
-                error!("Message handling error: {e}");
-            }
-        }));
+        handles.push(tokio::spawn(async move { handle_messages(rx).await }));
 
         for ws in &self.workspaces {
             let name = &ws.name;
@@ -209,40 +205,44 @@ async fn handler_push_events(
     Ok(())
 }
 
-async fn handle_messages(
-    mut rx: UnboundedReceiver<(Arc<Bot>, SlackMessageEvent)>,
-) -> anyhow::Result<()> {
+async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackMessageEvent)>) {
     while let Some((bot, msg)) = rx.recv().await {
         // debug!("Got message: {msg:#?}");
-        if let Some(channel_id) = msg.origin.channel {
-            let channel = channel_name(&bot, &channel_id.0);
-            if let Some(cont) = msg.content {
-                if let Some(text) = cont.text {
-                    info!("#{channel}: {text}");
+        if let Err(e) = handle_msg(bot, msg).await {
+            error!("Slack msg handling failed: {e:?}");
+        }
+    }
+}
 
-                    for url_cap in bot
-                        .url_re
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("No url_regex_re"))?
-                        .captures_iter(text.as_ref())
-                    {
-                        let url_s = url_cap[1].to_string();
-                        info!("*** on {channel} detected url: {url_s}");
-                        let mut dbc = start_db(&bot.url_log_db).await?;
-                        info!(
-                            "Urllog: inserted {} row(s)",
-                            db_add_url(
-                                &mut dbc,
-                                &UrlCtx {
-                                    ts: Utc::now().timestamp(),
-                                    chan: channel.into(),
-                                    nick: "N/A".into(),
-                                    url: url_s,
-                                },
-                            )
-                            .await?
-                        );
-                    }
+async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()> {
+    if let Some(channel_id) = msg.origin.channel {
+        let channel = channel_name(&bot, &channel_id.0);
+        if let Some(cont) = msg.content {
+            if let Some(text) = cont.text {
+                info!("#{channel}: {text}");
+
+                for url_cap in bot
+                    .url_re
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("No url_regex_re"))?
+                    .captures_iter(text.as_ref())
+                {
+                    let url_s = url_cap[1].to_string();
+                    info!("*** on {channel} detected url: {url_s}");
+                    let mut dbc = start_db(&bot.url_log_db).await?;
+                    info!(
+                        "Urllog: inserted {} row(s)",
+                        db_add_url(
+                            &mut dbc,
+                            &UrlCtx {
+                                ts: Utc::now().timestamp(),
+                                chan: channel.into(),
+                                nick: "N/A".into(),
+                                url: url_s,
+                            },
+                        )
+                        .await?
+                    );
                 }
             }
         }

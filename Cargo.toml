@@ -1,6 +1,6 @@
 [package]
 name = "sjmb_slack"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 resolver = "2"
 authors = ["Sami J. Mäkinen <sjm@iki.fi>"]
