@@ -1,6 +1,6 @@
 [package]
 name = "sjmb_slack"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2021"
 resolver = "2"
 authors = ["Sami J. Mäkinen <sjm@iki.fi>"]
@@ -27,7 +27,7 @@ slack-morphism = { version = "1.15", features = ["hyper", "axum"] }
 sqlx = { version = "0.7", features = [
     "macros",
     "migrate",
-    "runtime-tokio-native-tls",
+    "runtime-tokio-rustls",
     "sqlite",
 ] }
 structopt = "0.3"
@@ -40,8 +40,6 @@ build-data = "0.1"
 
 [profile.release]
 lto = true
-opt-level = "s" # static
-# opt-level = 3 # default
-# opt-level = 'z'  # Optimize for size.
+opt-level = 3
 
 # EOF
