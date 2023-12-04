@@ -166,7 +166,7 @@ fn handler_error(
     err: Box<dyn std::error::Error + Send + Sync>,
     _client: Arc<SlackHyperClient>,
     _state: SlackClientEventsUserState,
-) -> http::StatusCode {
+) -> http::status::StatusCode {
     error!("{:#?}", err);
 
     // This return value should be OK if we want to return successful ack
