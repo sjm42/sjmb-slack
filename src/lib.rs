@@ -9,7 +9,4 @@ pub use db_util::*;
 pub mod slackbot;
 pub use slackbot::*;
 
-pub mod str_util;
-pub use str_util::*;
-
 // EOF

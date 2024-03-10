@@ -52,7 +52,7 @@ impl Bot {
 
         for ws in bot.workspaces.iter() {
             info!("SlackBot::new(): WS {}", ws.name);
-            let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()));
+            let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()?));
 
             let api_token = SlackApiToken::new(ws.api_token.clone().into());
 
@@ -121,7 +121,7 @@ impl Bot {
             info!("SlackBot::run(): WS {name}");
 
             let sock_token = SlackApiToken::new(ws.socket_token.clone().into());
-            let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()));
+            let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()?));
 
             let socket_mode_callbacks = SlackSocketModeListenerCallbacks::new()
                 .with_interaction_events(handler_interaction_events)
