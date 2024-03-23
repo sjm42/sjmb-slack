@@ -44,9 +44,6 @@ impl Bot {
         info!("Reading config file {file}");
         let mut bot: Bot = serde_json::from_reader(BufReader::new(File::open(file)?))?;
 
-        // Expand $HOME where relevant
-        bot.url_log_db = shellexpand::full(&bot.url_log_db)?.into_owned();
-
         // pre-compile url detection regex
         bot.url_re = Some(Regex::new(&bot.url_regex)?);
 
