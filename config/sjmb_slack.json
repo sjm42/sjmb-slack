@@ -1,6 +1,6 @@
 {
     "url_regex": "<(https?://[^>]+)>",
-    "url_log_db": "$HOME/sjmb_slack/data/urllog.db",
+    "url_log_db": "postgres:///url",
     "workspaces": [
         {
             "name": "foo",
