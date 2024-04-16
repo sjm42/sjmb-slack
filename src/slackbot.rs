@@ -1,12 +1,12 @@
 // slackbot.rs
 
+use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
+
 use ::serde::{Deserialize, Serialize};
 use anyhow::anyhow;
 use chrono::*;
-use log::*;
 use regex::Regex;
 use slack_morphism::prelude::*;
-use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::*;
