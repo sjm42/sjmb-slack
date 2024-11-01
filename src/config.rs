@@ -52,6 +52,7 @@ impl OptsCommon {
         debug!("Git commit: {}", env!("GIT_COMMIT"));
         debug!("Source timestamp: {}", env!("SOURCE_TIMESTAMP"));
         debug!("Compiler version: {}", env!("RUSTC_VERSION"));
+        rustls::crypto::ring::default_provider().install_default().expect("Failed to install rustls crypto provider");
     }
 }
 
