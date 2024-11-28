@@ -1,9 +1,7 @@
 // db_util.rs
 
-use chrono::*;
 use futures::TryStreamExt;
 use sqlx::{Pool, Postgres};
-use tokio::time::{Duration, sleep};
 
 use crate::*;
 
@@ -25,8 +23,8 @@ pub struct UrlCtx {
 }
 
 pub async fn start_db<S>(db_url: S) -> anyhow::Result<DbCtx>
-    where
-        S: AsRef<str>,
+where
+    S: AsRef<str>,
 {
     let dbc = sqlx::PgPool::connect(db_url.as_ref()).await?;
     let db = DbCtx {
@@ -108,5 +106,4 @@ pub async fn db_check_url(
         .fetch(&db.dbc);
     Ok(st_check_url.try_next().await?)
 }
-
 // EOF

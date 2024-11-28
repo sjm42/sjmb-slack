@@ -20,8 +20,7 @@ pub struct OptsCommon {
 }
 
 impl OptsCommon {
-    pub fn finalize(&mut self) -> anyhow::Result<()>
-    {
+    pub fn finalize(&mut self) -> anyhow::Result<()> {
         self.bot_config = shellexpand::full(&self.bot_config)?.into_owned();
         Ok(())
     }
@@ -44,16 +43,14 @@ impl OptsCommon {
             .with_target(false)
             .init();
 
-        info!(
-            "Starting up {name} v{}...",
-            env!("CARGO_PKG_VERSION")
-        );
+        info!("Starting up {name} v{}...", env!("CARGO_PKG_VERSION"));
         debug!("Git branch: {}", env!("GIT_BRANCH"));
         debug!("Git commit: {}", env!("GIT_COMMIT"));
         debug!("Source timestamp: {}", env!("SOURCE_TIMESTAMP"));
         debug!("Compiler version: {}", env!("RUSTC_VERSION"));
-        rustls::crypto::ring::default_provider().install_default().expect("Failed to install rustls crypto provider");
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("Failed to install rustls crypto provider");
     }
 }
-
 // EOF
