@@ -2302,9 +2302,9 @@ dependencies = [
 
 [[package]]
 name = "slack-morphism"
-version = "2.10.0"
+version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9066a0fb16e1b85ba88893d41813bd0b30723f928e0eadb2e5fb43f5734ce170"
+checksum = "e0fdcc4b89e28a950f127f77f44a41e65abaabecdbfb8832e545b4a7958906b7"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -2642,9 +2642,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.19.0"
+version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "488960f40a3fd53d72c2a29a58722561dee8afdd175bd88e3db4677d7b2ba600"
+checksum = "7437ac7763b9b123ccf33c338a5cc1bac6f69b45a136c19bdd8a65e3916435bf"
 dependencies = [
  "fastrand",
  "getrandom 0.3.2",
