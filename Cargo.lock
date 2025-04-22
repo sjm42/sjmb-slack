@@ -158,9 +158,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.28.1"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ddeb19ee86cb16ecfc871e5b0660aff6285760957aaedda6284cf0e790d3769"
+checksum = "bfa9b6986f250236c27e5a204062434a773a13243d2ffc2955f37bdba4c5c6a1"
 dependencies = [
  "bindgen",
  "cc",
@@ -1353,9 +1353,9 @@ dependencies = [
 
 [[package]]
 name = "libm"
-version = "0.2.11"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
+checksum = "e6d154aedcb0b7a1e91a3fddbe2a8350d3da76ac9d0220ae20da5c7aa8269612"
 
 [[package]]
 name = "libredox"
@@ -2295,9 +2295,9 @@ dependencies = [
 
 [[package]]
 name = "slack-morphism"
-version = "2.10.1"
+version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0fdcc4b89e28a950f127f77f44a41e65abaabecdbfb8832e545b4a7958906b7"
+checksum = "8cd137c13d9757d208a0da70415cd2e5b230e3fd64f87512f389fe977d3da899"
 dependencies = [
  "async-recursion",
  "async-trait",
