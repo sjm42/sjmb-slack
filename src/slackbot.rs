@@ -73,7 +73,13 @@ impl Bot {
                 .for_each(|c| {
                     bot.channels.insert(
                         c.id.to_string(),
-                        format!("{}-{}", ws.name, c.name_normalized.as_ref().unwrap()),
+                        format!(
+                            "{}-{}",
+                            ws.name,
+                            c.name_normalized
+                                .clone()
+                                .unwrap_or_else(|| "N/A".to_string())
+                        ),
                     );
                 });
 
@@ -87,11 +93,10 @@ impl Bot {
                 .await?
                 .messages
                 .iter()
-                .filter(|m| m.content.text.is_some())
-                .map(|m| m.content.text.as_ref().unwrap().to_string())
+                .filter_map(|m| m.content.text.clone())
                 .collect::<Vec<String>>();
             info!("Got last 10 messages: {msgs:#?}");
-            */
+             */
         }
         debug!("channels: {:#?}", &bot.channels);
 
