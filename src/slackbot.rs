@@ -229,7 +229,7 @@ async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()>
         if let Some(cont) = content
             && let Some(text) = cont.text
         {
-            info!("#{channel}: {text}");
+            info!("#{channel} ({:#?}): {text}", sender);
 
             for url_cap in bot
                 .url_re
