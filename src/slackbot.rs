@@ -5,7 +5,10 @@ use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
 use regex::Regex;
 use ::serde::{Deserialize, Serialize};
 use slack_morphism::prelude::*;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::{
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    RwLock,
+};
 
 use crate::*;
 
@@ -14,6 +17,80 @@ struct SlackWorkspace {
     name: String,
     api_token: String,
     socket_token: String,
+
+    #[serde(skip)]
+    client: Option<Arc<SlackHyperClient>>,
+    #[serde(skip)]
+    api_token_runtime: Option<SlackApiToken>,
+    #[serde(skip)]
+    user_nicks: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl SlackWorkspace {
+    async fn sender_nick(&self, sender: &SlackMessageSender) -> String {
+        if let Some(nick) = sender_nick_hint(sender) {
+            if let Some(user_id) = sender.user.as_ref() {
+                self.cache_user_nick(user_id, &nick).await;
+            }
+            return nick;
+        }
+
+        if let Some(user_id) = sender.user.as_ref() {
+            if let Some(nick) = self.cached_user_nick(user_id).await {
+                return nick;
+            }
+
+            if let Some(nick) = self.lookup_user_nick(user_id).await {
+                self.cache_user_nick(user_id, &nick).await;
+                return nick;
+            }
+
+            return user_id.0.clone();
+        }
+
+        sender
+            .bot_id
+            .as_ref()
+            .map(|bot_id| bot_id.0.clone())
+            .unwrap_or_else(|| "N/A".to_string())
+    }
+
+    async fn cached_user_nick(&self, user_id: &SlackUserId) -> Option<String> {
+        self.user_nicks.read().await.get(&user_id.0).cloned()
+    }
+
+    async fn cache_user_nick(&self, user_id: &SlackUserId, nick: &str) {
+        if nick.is_empty() {
+            return;
+        }
+
+        self.user_nicks
+            .write()
+            .await
+            .insert(user_id.0.clone(), nick.to_string());
+    }
+
+    async fn lookup_user_nick(&self, user_id: &SlackUserId) -> Option<String> {
+        let client = self.client.as_ref()?;
+        let api_token = self.api_token_runtime.as_ref()?;
+        let sess = client.open_session(api_token);
+        match sess
+            .users_info(&SlackApiUsersInfoRequest {
+                user: user_id.clone(),
+                include_locale: None,
+            })
+            .await
+        {
+            Ok(resp) => slack_user_nick(&resp.user),
+            Err(e) => {
+                warn!(
+                    "WS {} users.info lookup failed for {}: {e:?}",
+                    self.name, user_id.0
+                );
+                None
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -31,7 +108,8 @@ pub struct Bot {
 #[derive(Debug)]
 struct BotState {
     bot: Arc<Bot>,
-    tx: UnboundedSender<(Arc<Bot>, SlackMessageEvent)>,
+    workspace: SlackWorkspace,
+    tx: UnboundedSender<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>,
 }
 
 impl Bot {
@@ -45,10 +123,9 @@ impl Bot {
         // pre-compile url detection regex
         bot.url_re = Some(Regex::new(&bot.url_regex)?);
 
-        for ws in bot.workspaces.iter() {
+        for ws in bot.workspaces.iter_mut() {
             info!("SlackBot::new(): WS {}", ws.name);
             let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()?));
-
             let api_token = SlackApiToken::new(ws.api_token.clone().into());
 
             info!("Testing API...");
@@ -97,6 +174,8 @@ impl Bot {
                 .collect::<Vec<String>>();
             info!("Got last 10 messages: {msgs:#?}");
              */
+            ws.client = Some(client);
+            ws.api_token_runtime = Some(api_token);
         }
         debug!("channels: {:#?}", &bot.channels);
 
@@ -112,16 +191,21 @@ impl Bot {
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut handles = vec![];
         let bot = Arc::new(self.clone());
-        let (tx, rx) = mpsc::unbounded_channel::<(Arc<Bot>, SlackMessageEvent)>();
+        let (tx, rx) = mpsc::unbounded_channel::<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>();
 
         handles.push(tokio::spawn(async move { handle_messages(rx).await }));
 
-        for ws in &self.workspaces {
+        for ws in &bot.workspaces {
             let name = &ws.name;
             info!("SlackBot::run(): WS {name}");
 
             let sock_token = SlackApiToken::new(ws.socket_token.clone().into());
-            let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new()?));
+            let client = ws
+                .client
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow!("No Slack client for workspace {name}"))?;
+            let workspace = ws.clone();
 
             let socket_mode_callbacks = SlackSocketModeListenerCallbacks::new()
                 .with_interaction_events(handler_interaction_events)
@@ -131,6 +215,7 @@ impl Bot {
                 SlackClientEventsListenerEnvironment::new(client.clone())
                     .with_user_state(BotState {
                         bot: bot.clone(),
+                        workspace: workspace.clone(),
                         tx: tx.clone(),
                     })
                     .with_error_handler(handler_error),
@@ -200,21 +285,27 @@ async fn handler_push_events(
 
     // Handle message events here
     if let SlackEventCallbackBody::Message(msge) = event.event {
-        botstate.tx.send((botstate.bot.clone(), msge))?;
+        botstate
+            .tx
+            .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
     }
     Ok(())
 }
 
-async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackMessageEvent)>) {
-    while let Some((bot, msg)) = rx.recv().await {
+async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>) {
+    while let Some((bot, workspace, msg)) = rx.recv().await {
         // debug!("Got message: {msg:#?}");
-        if let Err(e) = handle_msg(bot, msg).await {
+        if let Err(e) = handle_msg(bot, workspace, msg).await {
             error!("Slack msg handling failed: {e:?}");
         }
     }
 }
 
-async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()> {
+async fn handle_msg(
+    bot: Arc<Bot>,
+    workspace: SlackWorkspace,
+    msg: SlackMessageEvent,
+) -> anyhow::Result<()> {
     let SlackMessageEvent {
         origin,
         content,
@@ -224,12 +315,12 @@ async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()>
 
     if let Some(channel_id) = origin.channel {
         let channel = channel_name(&bot, &channel_id.0);
-        let nick = sender_nick(&sender);
+        let nick = sender_nick(&workspace, &sender).await;
 
         if let Some(cont) = content
             && let Some(text) = cont.text
         {
-            info!("#{channel} ({:#?}): {text}", sender);
+            info!("#{channel} ({sender:?}): {text}");
 
             for url_cap in bot
                 .url_re
@@ -259,41 +350,166 @@ async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()>
     Ok(())
 }
 
-fn sender_nick(sender: &SlackMessageSender) -> String {
+async fn sender_nick(workspace: &SlackWorkspace, sender: &SlackMessageSender) -> String {
+    workspace.sender_nick(sender).await
+}
+
+fn sender_nick_hint(sender: &SlackMessageSender) -> Option<String> {
     sender
         .username
         .as_deref()
         .filter(|nick| !nick.is_empty())
-        // .or_else(|| sender.user.as_ref().map(|user| user.0.as_str()))
-        /*
-        .or_else(|| {
-            sender
-                .user_profile
-                .as_ref()
-                .and_then(|profile| profile.display_name.as_deref())
-                .filter(|nick| !nick.is_empty())
-        })
-        */
-        .or_else(|| {
-            sender
-                .user_profile
-                .as_ref()
-                .and_then(|profile| profile.real_name.as_deref())
-                .filter(|nick| !nick.is_empty())
-        })
-        /*
         .map(str::to_owned)
-        .or_else(|| sender.user.as_ref().map(|user| user.0.clone()))
-        .or_else(|| sender.bot_id.as_ref().map(|bot| bot.0.clone()))
-         */
-        .unwrap_or("N/A")
-        .to_string()
+        .or_else(|| {
+            sender
+                .user_profile
+                .as_ref()
+                .and_then(slack_user_profile_nick)
+        })
+}
+
+fn slack_user_nick(user: &SlackUser) -> Option<String> {
+    user.profile
+        .as_ref()
+        .and_then(slack_user_profile_nick)
+        .or_else(|| {
+            user.real_name
+                .as_deref()
+                .filter(|nick| !nick.is_empty())
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            user.name
+                .as_deref()
+                .filter(|nick| !nick.is_empty())
+                .map(str::to_owned)
+        })
+}
+
+fn slack_user_profile_nick(profile: &SlackUserProfile) -> Option<String> {
+    profile
+        .display_name
+        .as_deref()
+        .filter(|nick| !nick.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            info!("No display_name");
+            profile
+                .display_name_normalized
+                .as_deref()
+                .filter(|nick| !nick.is_empty())
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            info!("No display_name_normalized");
+            profile
+                .real_name
+                .as_deref()
+                .filter(|nick| !nick.is_empty())
+                .map(str::to_owned)
+        })
+        .or_else(|| {
+            info!("No real_name");
+            profile
+                .real_name_normalized
+                .as_deref()
+                .filter(|nick| !nick.is_empty())
+                .map(str::to_owned)
+        })
 }
 
 fn channel_name<'a>(bot: &'a Bot, id: &'a str) -> &'a str {
     match bot.channels.get(id) {
         Some(s) => s.as_str(),
         None => "<NONE>",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_nick_prefers_display_name() {
+        let profile = SlackUserProfile {
+            id: None,
+            display_name: Some("display".into()),
+            real_name: Some("real".into()),
+            real_name_normalized: None,
+            avatar_hash: None,
+            status_text: None,
+            status_expiration: None,
+            status_emoji: None,
+            display_name_normalized: None,
+            email: None,
+            icon: None,
+            team: None,
+            start_date: None,
+            first_name: None,
+            last_name: None,
+            phone: None,
+            pronouns: None,
+            title: None,
+            fields: None,
+        };
+
+        assert_eq!(
+            slack_user_profile_nick(&profile).as_deref(),
+            Some("display")
+        );
+    }
+
+    #[test]
+    fn user_nick_falls_back_to_real_name_then_name() {
+        let user = SlackUser {
+            id: SlackUserId("U123".into()),
+            team_id: None,
+            name: Some("legacy".into()),
+            locale: None,
+            profile: Some(SlackUserProfile {
+                id: None,
+                display_name: Some(String::new()),
+                real_name: Some("Real Name".into()),
+                real_name_normalized: None,
+                avatar_hash: None,
+                status_text: None,
+                status_expiration: None,
+                status_emoji: None,
+                display_name_normalized: None,
+                email: None,
+                icon: None,
+                team: None,
+                start_date: None,
+                first_name: None,
+                last_name: None,
+                phone: None,
+                pronouns: None,
+                title: None,
+                fields: None,
+            }),
+            flags: SlackUserFlags {
+                is_admin: None,
+                is_app_user: None,
+                is_bot: None,
+                is_invited_user: None,
+                is_owner: None,
+                is_primary_owner: None,
+                is_restricted: None,
+                is_stranger: None,
+                is_ultra_restricted: None,
+                has_2fa: None,
+            },
+            tz: None,
+            tz_label: None,
+            tz_offset: None,
+            updated: None,
+            deleted: None,
+            color: None,
+            real_name: None,
+            enterprise_user: None,
+        };
+
+        assert_eq!(slack_user_nick(&user).as_deref(), Some("Real Name"));
     }
 }
 // EOF
