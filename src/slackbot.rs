@@ -265,6 +265,7 @@ fn sender_nick(sender: &SlackMessageSender) -> String {
         .as_deref()
         .filter(|nick| !nick.is_empty())
         // .or_else(|| sender.user.as_ref().map(|user| user.0.as_str()))
+        /*
         .or_else(|| {
             sender
                 .user_profile
@@ -272,7 +273,7 @@ fn sender_nick(sender: &SlackMessageSender) -> String {
                 .and_then(|profile| profile.display_name.as_deref())
                 .filter(|nick| !nick.is_empty())
         })
-        /*
+        */
         .or_else(|| {
             sender
                 .user_profile
@@ -280,6 +281,7 @@ fn sender_nick(sender: &SlackMessageSender) -> String {
                 .and_then(|profile| profile.real_name.as_deref())
                 .filter(|nick| !nick.is_empty())
         })
+        /*
         .map(str::to_owned)
         .or_else(|| sender.user.as_ref().map(|user| user.0.clone()))
         .or_else(|| sender.bot_id.as_ref().map(|bot| bot.0.clone()))
