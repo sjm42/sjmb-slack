@@ -215,9 +215,18 @@ async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackMessageEvent)
 }
 
 async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()> {
-    if let Some(channel_id) = msg.origin.channel {
+    let SlackMessageEvent {
+        origin,
+        content,
+        sender,
+        ..
+    } = msg;
+
+    if let Some(channel_id) = origin.channel {
         let channel = channel_name(&bot, &channel_id.0);
-        if let Some(cont) = msg.content
+        let nick = sender_nick(&sender);
+
+        if let Some(cont) = content
             && let Some(text) = cont.text
         {
             info!("#{channel}: {text}");
@@ -238,7 +247,7 @@ async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()>
                         &UrlCtx {
                             ts: Utc::now().timestamp(),
                             chan: channel.into(),
-                            nick: "N/A".into(),
+                            nick: nick.clone(),
                             url: url_s,
                         },
                     )
@@ -250,11 +259,38 @@ async fn handle_msg(bot: Arc<Bot>, msg: SlackMessageEvent) -> anyhow::Result<()>
     Ok(())
 }
 
+fn sender_nick(sender: &SlackMessageSender) -> String {
+    sender
+        .username
+        .as_deref()
+        .filter(|nick| !nick.is_empty())
+        /*
+        .or_else(|| {
+            sender
+                .user_profile
+                .as_ref()
+                .and_then(|profile| profile.display_name.as_deref())
+                .filter(|nick| !nick.is_empty())
+        })
+        .or_else(|| {
+            sender
+                .user_profile
+                .as_ref()
+                .and_then(|profile| profile.real_name.as_deref())
+                .filter(|nick| !nick.is_empty())
+        })
+        .map(str::to_owned)
+        .or_else(|| sender.user.as_ref().map(|user| user.0.clone()))
+        .or_else(|| sender.bot_id.as_ref().map(|bot| bot.0.clone()))
+         */
+        .unwrap_or("N/A")
+        .to_string()
+}
+
 fn channel_name<'a>(bot: &'a Bot, id: &'a str) -> &'a str {
     match bot.channels.get(id) {
         Some(s) => s.as_str(),
         None => "<NONE>",
     }
 }
-
 // EOF

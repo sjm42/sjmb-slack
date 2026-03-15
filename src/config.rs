@@ -24,7 +24,6 @@ impl OptsCommon {
         self.bot_config = shellexpand::full(&self.bot_config)?.into_owned();
         Ok(())
     }
-
     pub fn get_loglevel(&self) -> Level {
         if self.trace {
             Level::TRACE
@@ -36,7 +35,6 @@ impl OptsCommon {
             Level::ERROR
         }
     }
-
     pub fn start_pgm(&self, name: &str) {
         tracing_subscriber::fmt()
             .with_max_level(self.get_loglevel())
