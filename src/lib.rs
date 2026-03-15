@@ -2,7 +2,7 @@
 
 pub use anyhow::anyhow;
 pub use chrono::*;
-pub use tokio::time::{sleep, Duration};
+pub use tokio::time::{Duration, sleep};
 pub use tracing::*;
 
 pub mod config;

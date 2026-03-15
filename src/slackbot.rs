@@ -2,12 +2,12 @@
 
 use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
 
-use regex::Regex;
 use ::serde::{Deserialize, Serialize};
+use regex::Regex;
 use slack_morphism::prelude::*;
 use tokio::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender},
     RwLock,
+    mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
 
 use crate::*;
@@ -28,30 +28,51 @@ struct SlackWorkspace {
 
 impl SlackWorkspace {
     async fn sender_nick(&self, sender: &SlackMessageSender) -> String {
-        if let Some(nick) = sender_nick_hint(sender) {
-            if let Some(user_id) = sender.user.as_ref() {
-                self.cache_user_nick(user_id, &nick).await;
-            }
-            return nick;
-        }
-
         if let Some(user_id) = sender.user.as_ref() {
-            if let Some(nick) = self.cached_user_nick(user_id).await {
-                return nick;
-            }
+            let hinted_nick = sender
+                .username
+                .as_deref()
+                .and_then(non_empty)
+                .map(str::to_owned)
+                .or_else(|| {
+                    sender
+                        .user_profile
+                        .as_ref()
+                        .and_then(slack_user_profile_nick)
+                });
+            let cached_nick = if hinted_nick.is_none() {
+                self.cached_user_nick(user_id).await
+            } else {
+                None
+            };
+            let looked_up_nick = if hinted_nick.is_none() && cached_nick.is_none() {
+                self.lookup_user_nick(user_id).await
+            } else {
+                None
+            };
 
-            if let Some(nick) = self.lookup_user_nick(user_id).await {
+            if let Some(nick) = hinted_nick.or(cached_nick).or(looked_up_nick) {
                 self.cache_user_nick(user_id, &nick).await;
                 return nick;
             }
 
-            return user_id.0.clone();
+            let fallback = slack_user_fallback(user_id);
+            self.cache_user_nick(user_id, &fallback).await;
+            return fallback;
         }
 
         sender
-            .bot_id
-            .as_ref()
-            .map(|bot_id| bot_id.0.clone())
+            .username
+            .as_deref()
+            .and_then(non_empty)
+            .map(str::to_owned)
+            .or_else(|| {
+                sender
+                    .user_profile
+                    .as_ref()
+                    .and_then(slack_user_profile_nick)
+            })
+            .or_else(|| sender.bot_id.as_ref().map(|bot_id| bot_id.0.clone()))
             .unwrap_or_else(|| "N/A".to_string())
     }
 
@@ -354,18 +375,8 @@ async fn sender_nick(workspace: &SlackWorkspace, sender: &SlackMessageSender) ->
     workspace.sender_nick(sender).await
 }
 
-fn sender_nick_hint(sender: &SlackMessageSender) -> Option<String> {
-    sender
-        .username
-        .as_deref()
-        .filter(|nick| !nick.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            sender
-                .user_profile
-                .as_ref()
-                .and_then(slack_user_profile_nick)
-        })
+fn non_empty(value: &str) -> Option<&str> {
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn slack_user_nick(user: &SlackUser) -> Option<String> {
@@ -375,47 +386,43 @@ fn slack_user_nick(user: &SlackUser) -> Option<String> {
         .or_else(|| {
             user.real_name
                 .as_deref()
-                .filter(|nick| !nick.is_empty())
+                .and_then(non_empty)
                 .map(str::to_owned)
         })
-        .or_else(|| {
-            user.name
-                .as_deref()
-                .filter(|nick| !nick.is_empty())
-                .map(str::to_owned)
-        })
+        .or_else(|| user.name.as_deref().and_then(non_empty).map(str::to_owned))
 }
 
 fn slack_user_profile_nick(profile: &SlackUserProfile) -> Option<String> {
     profile
         .display_name
         .as_deref()
-        .filter(|nick| !nick.is_empty())
+        .and_then(non_empty)
         .map(str::to_owned)
         .or_else(|| {
-            info!("No display_name");
             profile
                 .display_name_normalized
                 .as_deref()
-                .filter(|nick| !nick.is_empty())
+                .and_then(non_empty)
                 .map(str::to_owned)
         })
         .or_else(|| {
-            info!("No display_name_normalized");
             profile
                 .real_name
                 .as_deref()
-                .filter(|nick| !nick.is_empty())
+                .and_then(non_empty)
                 .map(str::to_owned)
         })
         .or_else(|| {
-            info!("No real_name");
             profile
                 .real_name_normalized
                 .as_deref()
-                .filter(|nick| !nick.is_empty())
+                .and_then(non_empty)
                 .map(str::to_owned)
         })
+}
+
+fn slack_user_fallback(user_id: &SlackUserId) -> String {
+    format!("<@{}>", user_id.0)
 }
 
 fn channel_name<'a>(bot: &'a Bot, id: &'a str) -> &'a str {
@@ -454,8 +461,8 @@ mod tests {
         };
 
         assert_eq!(
-            slack_user_profile_nick(&profile).as_deref(),
-            Some("display")
+            slack_user_profile_nick(&profile),
+            Some("display".to_string())
         );
     }
 
@@ -509,7 +516,7 @@ mod tests {
             enterprise_user: None,
         };
 
-        assert_eq!(slack_user_nick(&user).as_deref(), Some("Real Name"));
+        assert_eq!(slack_user_nick(&user), Some("Real Name".to_string()));
     }
 }
 // EOF
