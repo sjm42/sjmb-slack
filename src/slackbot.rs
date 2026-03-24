@@ -306,9 +306,11 @@ async fn handler_push_events(
 
     // Handle message events here
     if let SlackEventCallbackBody::Message(msge) = event.event {
-        botstate
-            .tx
-            .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
+        if should_process_message(&msge) {
+            botstate
+                .tx
+                .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
+        }
     }
     Ok(())
 }
@@ -373,6 +375,19 @@ async fn handle_msg(
 
 async fn sender_nick(workspace: &SlackWorkspace, sender: &SlackMessageSender) -> String {
     workspace.sender_nick(sender).await
+}
+
+fn should_process_message(msg: &SlackMessageEvent) -> bool {
+    if msg.hidden.unwrap_or(false) {
+        return false;
+    }
+
+    matches!(
+        msg.subtype,
+        None | Some(SlackMessageEventType::BotMessage)
+            | Some(SlackMessageEventType::MeMessage)
+            | Some(SlackMessageEventType::ThreadBroadcast)
+    )
 }
 
 fn non_empty(value: &str) -> Option<&str> {
@@ -517,6 +532,54 @@ mod tests {
         };
 
         assert_eq!(slack_user_nick(&user), Some("Real Name".to_string()));
+    }
+
+    #[test]
+    fn should_process_plain_messages() {
+        let msg = SlackMessageEvent {
+            origin: SlackMessageOrigin::new(SlackTs("1234.5678".into())),
+            content: Some(SlackMessageContent::new().with_text("https://example.com".into())),
+            sender: SlackMessageSender::new(),
+            subtype: None,
+            hidden: None,
+            message: None,
+            previous_message: None,
+            deleted_ts: None,
+        };
+
+        assert!(should_process_message(&msg));
+    }
+
+    #[test]
+    fn should_ignore_changed_messages() {
+        let msg = SlackMessageEvent {
+            origin: SlackMessageOrigin::new(SlackTs("1234.5678".into())),
+            content: Some(SlackMessageContent::new().with_text("https://example.com".into())),
+            sender: SlackMessageSender::new(),
+            subtype: Some(SlackMessageEventType::MessageChanged),
+            hidden: Some(true),
+            message: None,
+            previous_message: None,
+            deleted_ts: None,
+        };
+
+        assert!(!should_process_message(&msg));
+    }
+
+    #[test]
+    fn should_ignore_deleted_messages() {
+        let msg = SlackMessageEvent {
+            origin: SlackMessageOrigin::new(SlackTs("1234.5678".into())),
+            content: None,
+            sender: SlackMessageSender::new(),
+            subtype: Some(SlackMessageEventType::MessageDeleted),
+            hidden: Some(true),
+            message: None,
+            previous_message: None,
+            deleted_ts: Some(SlackTs("1234.5678".into())),
+        };
+
+        assert!(!should_process_message(&msg));
     }
 }
 // EOF

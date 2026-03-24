@@ -19,6 +19,7 @@ configurable regex, and writes them into PostgreSQL.
 - `src/db_util.rs`: PostgreSQL connection helpers and insert retry logic.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`).
 - `config/sjmb_slack.json`: example runtime config.
+- `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes, Socket Mode, and event subscriptions.
 - `install.sh`: copies release binary to `$HOME/sjmb_slack/bin`.
 
 ## Runtime configuration
@@ -51,6 +52,44 @@ Workspace entry fields:
 - `api_token`: bot token for Web API calls (startup validation and channel discovery).
 - `socket_token`: app-level token for Socket Mode listener.
 
+## Slack app setup
+
+This bot relies on Socket Mode plus Slack Event Subscriptions. The app must be configured to receive
+channel message events for channels where the bot has been invited.
+
+Required bot event subscriptions:
+
+- `message.channels`
+- `message.groups`
+
+Required bot token scopes:
+
+- `channels:history`
+- `groups:history`
+- `channels:read`
+- `groups:read`
+- `users:read`
+
+After changing scopes or event subscriptions in Slack, reinstall the app before testing.
+
+The repository includes a manifest you can import when creating or updating the Slack app:
+
+- [config/sjmb_slack.manifest.yaml](/home/sjm/git/Rust/sjmb-slack/config/sjmb_slack.manifest.yaml)
+
+What the manifest does not include:
+
+- The app-level Socket Mode token (`xapp-...`). Create it in Slack after import.
+- The runtime config file with your actual `api_token`, `socket_token`, and database URL.
+
+Typical setup flow:
+
+1. Create or update the Slack app from the manifest.
+2. Enable Socket Mode if Slack prompts for confirmation.
+3. Generate an app-level token for Socket Mode with connections enabled.
+4. Install or reinstall the app to the workspace.
+5. Copy the bot token (`xoxb-...`) and app token (`xapp-...`) into `config/sjmb_slack.json`.
+6. Invite the bot to the channels you want monitored.
+
 ## CLI flags
 
 - `-v`, `--verbose`: `INFO` logs.
@@ -77,7 +116,8 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 3. For each workspace, a Socket Mode listener is started.
 4. Callback behavior:
 
-- `handler_push_events`: forwards only `Message` events into the channel.
+- `handler_push_events`: forwards only relevant `Message` events into the channel. Edited, deleted,
+  and other non-content message subtypes are ignored.
 - `handler_interaction_events`: currently logs and returns `Ok(())`.
 - `handler_error`: logs the error and returns HTTP `200 OK` to acknowledge Slack retries.
 
