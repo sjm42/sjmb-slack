@@ -305,12 +305,12 @@ async fn handler_push_events(
     // debug!("{:#?}", botstate);
 
     // Handle message events here
-    if let SlackEventCallbackBody::Message(msge) = event.event {
-        if should_process_message(&msge) {
-            botstate
-                .tx
-                .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
-        }
+    if let SlackEventCallbackBody::Message(msge) = event.event
+        && should_process_message(&msge)
+    {
+        botstate
+            .tx
+            .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
     }
     Ok(())
 }
@@ -473,6 +473,8 @@ mod tests {
             pronouns: None,
             title: None,
             fields: None,
+            huddle_state: None,
+            huddle_state_expiration_ts: None,
         };
 
         assert_eq!(
@@ -508,6 +510,8 @@ mod tests {
                 pronouns: None,
                 title: None,
                 fields: None,
+                huddle_state: None,
+                huddle_state_expiration_ts: None,
             }),
             flags: SlackUserFlags {
                 is_admin: None,
