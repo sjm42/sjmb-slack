@@ -256,10 +256,8 @@ impl Bot {
             let wsname = name.clone();
             handles.push(tokio::spawn(async move {
                 debug!("WS {wsname} serve...");
-                error!(
-                    "Socket listener returned {}",
-                    socket_mode_listener.serve().await
-                );
+                let ret = socket_mode_listener.serve().await;
+                error!("WS {wsname} socket listener returned {ret}");
             }));
         }
         drop(tx);
@@ -271,15 +269,35 @@ impl Bot {
 fn handler_error(
     err: Box<dyn std::error::Error + Send + Sync>,
     _client: Arc<SlackHyperClient>,
-    _state: SlackClientEventsUserState,
+    state: SlackClientEventsUserState,
 ) -> http::status::StatusCode {
-    error!("{:#?}", err);
+    let workspace_name = handler_workspace_name(state);
+
+    match err.downcast_ref::<slack_morphism::errors::SlackClientError>() {
+        Some(slack_morphism::errors::SlackClientError::SocketModeProtocolError(_)) => {
+            warn!("WS {workspace_name} Slack Socket Mode protocol error: {err:#?}");
+        }
+        _ => {
+            error!("WS {workspace_name} Slack Socket Mode error: {err:#?}");
+        }
+    }
 
     // This return value should be OK if we want to return successful ack
     // to the Slack server using Web-sockets
     // https://api.slack.com/apis/connections/socket-implement#acknowledge
     // so that Slack knows whether to retry
     http::StatusCode::OK
+}
+
+fn handler_workspace_name(state: SlackClientEventsUserState) -> String {
+    futures::executor::block_on(async move {
+        state
+            .read()
+            .await
+            .get_user_state::<BotState>()
+            .map(|botstate| botstate.workspace.name.clone())
+            .unwrap_or_else(|| "unknown".to_string())
+    })
 }
 
 async fn handler_interaction_events(
