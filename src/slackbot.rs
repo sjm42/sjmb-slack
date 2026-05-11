@@ -126,11 +126,18 @@ pub struct Bot {
     channels: HashMap<String, String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BotState {
     bot: Arc<Bot>,
     workspace: SlackWorkspace,
-    tx: UnboundedSender<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>,
+    tx: UnboundedSender<QueuedMessage>,
+}
+
+#[derive(Debug)]
+struct QueuedMessage {
+    bot: Arc<Bot>,
+    msg: SlackMessageEvent,
+    sender_nick: String,
 }
 
 impl Bot {
@@ -212,7 +219,7 @@ impl Bot {
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut handles = vec![];
         let bot = Arc::new(self.clone());
-        let (tx, rx) = mpsc::unbounded_channel::<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>();
+        let (tx, rx) = mpsc::unbounded_channel::<QueuedMessage>();
 
         handles.push(tokio::spawn(async move { handle_messages(rx).await }));
 
@@ -315,28 +322,33 @@ async fn handler_push_events(
     state: SlackClientEventsUserState,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // info!("{:#?}", event);
-    let statelock = state.write().await;
-
-    let botstate = statelock
-        .get_user_state::<BotState>()
-        .ok_or_else(|| anyhow::anyhow!("No state"))?;
+    let botstate = {
+        let statelock = state.read().await;
+        statelock
+            .get_user_state::<BotState>()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("No state"))?
+    };
     // debug!("{:#?}", botstate);
 
     // Handle message events here
     if let SlackEventCallbackBody::Message(msge) = event.event
         && should_process_message(&msge)
     {
-        botstate
-            .tx
-            .send((botstate.bot.clone(), botstate.workspace.clone(), msge))?;
+        let sender_nick = botstate.workspace.sender_nick(&msge.sender).await;
+        botstate.tx.send(QueuedMessage {
+            bot: botstate.bot.clone(),
+            msg: msge,
+            sender_nick,
+        })?;
     }
     Ok(())
 }
 
-async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackWorkspace, SlackMessageEvent)>) {
-    while let Some((bot, workspace, msg)) = rx.recv().await {
+async fn handle_messages(mut rx: UnboundedReceiver<QueuedMessage>) {
+    while let Some(queued) = rx.recv().await {
         // debug!("Got message: {msg:#?}");
-        if let Err(e) = handle_msg(bot, workspace, msg).await {
+        if let Err(e) = handle_msg(queued.bot, queued.msg, queued.sender_nick).await {
             error!("Slack msg handling failed: {e:?}");
         }
     }
@@ -344,24 +356,23 @@ async fn handle_messages(mut rx: UnboundedReceiver<(Arc<Bot>, SlackWorkspace, Sl
 
 async fn handle_msg(
     bot: Arc<Bot>,
-    workspace: SlackWorkspace,
     msg: SlackMessageEvent,
+    sender_nick: String,
 ) -> anyhow::Result<()> {
     let SlackMessageEvent {
         origin,
         content,
-        sender,
+        sender: _,
         ..
     } = msg;
 
     if let Some(channel_id) = origin.channel {
         let channel = channel_name(&bot, &channel_id.0);
-        let nick = sender_nick(&workspace, &sender).await;
 
         if let Some(cont) = content
             && let Some(text) = cont.text
         {
-            info!("#{channel} ({sender:?}): {text}");
+            info!("#{channel} ({sender_nick}): {text}");
 
             for url_cap in bot
                 .url_re
@@ -379,7 +390,7 @@ async fn handle_msg(
                         &UrlCtx {
                             ts: Utc::now().timestamp(),
                             chan: channel.into(),
-                            nick: nick.clone(),
+                            nick: sender_nick.clone(),
                             url: url_s,
                         },
                     )
@@ -389,10 +400,6 @@ async fn handle_msg(
         }
     }
     Ok(())
-}
-
-async fn sender_nick(workspace: &SlackWorkspace, sender: &SlackMessageSender) -> String {
-    workspace.sender_nick(sender).await
 }
 
 fn should_process_message(msg: &SlackMessageEvent) -> bool {
