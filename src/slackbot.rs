@@ -2,12 +2,12 @@
 
 use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
 
-use ::serde::{Deserialize, Serialize};
 use regex::Regex;
+use ::serde::{Deserialize, Serialize};
 use slack_morphism::prelude::*;
 use tokio::sync::{
-    RwLock,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
+    RwLock,
 };
 
 use crate::*;
@@ -281,11 +281,12 @@ fn handler_error(
     let workspace_name = handler_workspace_name(state);
 
     match err.downcast_ref::<slack_morphism::errors::SlackClientError>() {
-        Some(slack_morphism::errors::SlackClientError::SocketModeProtocolError(_)) => {
-            warn!("WS {workspace_name} Slack Socket Mode protocol error: {err:#?}");
+        Some(slack_morphism::errors::SlackClientError::SocketModeProtocolError(p_err)) => {
+            // these errors are expected, so we don't need to log them with error!()
+            warn!("WS {workspace_name} Slack Socket Mode protocol error: {p_err:?}");
         }
         _ => {
-            error!("WS {workspace_name} Slack Socket Mode error: {err:#?}");
+            error!("WS {workspace_name} Slack Socket Mode error: {err:?}");
         }
     }
 

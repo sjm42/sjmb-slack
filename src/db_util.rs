@@ -61,7 +61,7 @@ pub async fn db_add_url(db: &mut DbCtx, ur: &UrlCtx) -> anyhow::Result<u64> {
             .await
         {
             Ok(res) => {
-                info!("Insert result: {res:#?}");
+                info!("Insert result: {res:?}");
                 retry = 0;
                 rowcnt = res.rows_affected();
                 break;
