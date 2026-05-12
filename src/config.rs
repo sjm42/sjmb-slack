@@ -2,8 +2,6 @@
 
 use std::env;
 
-use clap::Parser;
-
 use crate::*;
 
 #[derive(Debug, Clone, Parser)]

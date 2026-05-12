@@ -5,8 +5,8 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 
 - `src/bin/sjmb_slack.rs`: binary entrypoint (`main`) and CLI startup.
 - `src/lib.rs`: module exports.
-- `src/config.rs`: CLI flags, config path expansion, log level setup, and runtime initialization.
-- `src/slackbot.rs`: Slack Socket Mode handling, sender name lookup/cache, and URL extraction flow.
+- `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
+- `src/slackbot.rs`: Slack Socket Mode handling, sender name lookup/cache, message filtering/logging, and URL extraction flow.
 - `src/db_util.rs`: PostgreSQL helpers and retry logic for URL inserts.
 - `config/sjmb_slack.json`: example runtime config template.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes and event subscriptions.
@@ -22,6 +22,8 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 - `cargo fmt --check`: formatting check.
 - `cargo clippy --all-targets --all-features`: linting pass.
 - `cargo test`: run unit/integration tests.
+- `cargo update`: update compatible dependency versions in `Cargo.lock`.
+- `cargo outdated`: report dependencies that can be updated.
 - `cargo build --release && ./install.sh`: build and install to local bin directory.
 
 ## Coding Style & Naming Conventions

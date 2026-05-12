@@ -1,7 +1,5 @@
 // bin/sjmb_slack.rs
 
-use clap::Parser;
-
 use sjmb_slack::*;
 
 #[tokio::main]

@@ -3,11 +3,12 @@
 use std::{collections::HashMap, fs::File, io::BufReader, sync::Arc};
 
 use ::serde::{Deserialize, Serialize};
+use anyhow::anyhow;
 use regex::Regex;
 use slack_morphism::prelude::*;
 use tokio::sync::{
     RwLock,
-    mpsc::{self, UnboundedReceiver, UnboundedSender},
+    mpsc::{self, Receiver, Sender},
 };
 
 use crate::*;
@@ -123,19 +124,22 @@ pub struct Bot {
     #[serde(skip)]
     url_re: Option<Regex>,
     #[serde(skip)]
-    channels: HashMap<String, String>,
+    channels: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone)]
 struct BotState {
     bot: Arc<Bot>,
     workspace: SlackWorkspace,
-    tx: UnboundedSender<QueuedMessage>,
+    db: DbCtx,
+    tx: Sender<QueuedMessage>,
 }
 
 #[derive(Debug)]
 struct QueuedMessage {
     bot: Arc<Bot>,
+    db: DbCtx,
+    workspace_name: String,
     msg: SlackMessageEvent,
     sender_nick: String,
 }
@@ -176,7 +180,7 @@ impl Bot {
                 .iter()
                 .filter(|c| c.name_normalized.is_some())
                 .for_each(|c| {
-                    bot.channels.insert(
+                    bot.channels.entry(ws.name.clone()).or_default().insert(
                         c.id.to_string(),
                         format!(
                             "{}-{}",
@@ -211,6 +215,7 @@ impl Bot {
             "New runtime config successfully created in {} ms.",
             Utc::now().signed_duration_since(now1).num_milliseconds()
         );
+        // Warning: printing the full Bot config would expose Slack tokens.
         // debug!("New BotConfig:\n{bot:#?}");
 
         Ok(bot)
@@ -219,7 +224,8 @@ impl Bot {
     pub async fn run(&self) -> anyhow::Result<()> {
         let mut handles = vec![];
         let bot = Arc::new(self.clone());
-        let (tx, rx) = mpsc::unbounded_channel::<QueuedMessage>();
+        let db = start_db(&bot.url_log_db).await?;
+        let (tx, rx) = mpsc::channel::<QueuedMessage>(MESSAGE_QUEUE_BOUND);
 
         handles.push(tokio::spawn(async move { handle_messages(rx).await }));
 
@@ -244,6 +250,7 @@ impl Bot {
                     .with_user_state(BotState {
                         bot: bot.clone(),
                         workspace: workspace.clone(),
+                        db: db.clone(),
                         tx: tx.clone(),
                     })
                     .with_error_handler(handler_error),
@@ -264,12 +271,18 @@ impl Bot {
             handles.push(tokio::spawn(async move {
                 debug!("WS {wsname} serve...");
                 let ret = socket_mode_listener.serve().await;
-                error!("WS {wsname} socket listener returned {ret}");
+                Err(anyhow!(
+                    "WS {wsname} socket listener stopped unexpectedly with status {ret}"
+                ))
             }));
         }
         drop(tx);
-        futures::future::join_all(handles).await;
-        Ok(())
+        let (result, _idx, remaining) = futures::future::select_all(handles).await;
+        for handle in remaining {
+            handle.abort();
+        }
+
+        result?
     }
 }
 
@@ -329,6 +342,7 @@ async fn handler_push_events(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No state"))?
     };
+    // Warning: printing full BotState would expose Slack tokens through nested workspace config.
     // debug!("{:#?}", botstate);
 
     // Handle message events here
@@ -336,26 +350,44 @@ async fn handler_push_events(
         && should_process_message(&msge)
     {
         let sender_nick = botstate.workspace.sender_nick(&msge.sender).await;
-        botstate.tx.send(QueuedMessage {
-            bot: botstate.bot.clone(),
-            msg: msge,
-            sender_nick,
-        })?;
+        botstate
+            .tx
+            .send(QueuedMessage {
+                bot: botstate.bot.clone(),
+                db: botstate.db.clone(),
+                workspace_name: botstate.workspace.name.clone(),
+                msg: msge,
+                sender_nick,
+            })
+            .await?;
     }
     Ok(())
 }
 
-async fn handle_messages(mut rx: UnboundedReceiver<QueuedMessage>) {
+async fn handle_messages(mut rx: Receiver<QueuedMessage>) -> anyhow::Result<()> {
     while let Some(queued) = rx.recv().await {
         // debug!("Got message: {msg:#?}");
-        if let Err(e) = handle_msg(queued.bot, queued.msg, queued.sender_nick).await {
+        if let Err(e) = handle_msg(
+            queued.bot,
+            queued.db,
+            queued.workspace_name,
+            queued.msg,
+            queued.sender_nick,
+        )
+        .await
+        {
             error!("Slack msg handling failed: {e:?}");
         }
     }
+    Err(anyhow!(
+        "message handler stopped because all senders were dropped"
+    ))
 }
 
 async fn handle_msg(
     bot: Arc<Bot>,
+    db: DbCtx,
+    workspace_name: String,
     msg: SlackMessageEvent,
     sender_nick: String,
 ) -> anyhow::Result<()> {
@@ -367,7 +399,7 @@ async fn handle_msg(
     } = msg;
 
     if let Some(channel_id) = origin.channel {
-        let channel = channel_name(&bot, &channel_id.0);
+        let channel = channel_name(&bot, &workspace_name, &channel_id.0);
 
         if let Some(cont) = content
             && let Some(text) = cont.text
@@ -380,22 +412,26 @@ async fn handle_msg(
                 .ok_or_else(|| anyhow!("No url_regex_re"))?
                 .captures_iter(text.as_ref())
             {
-                let url_s = url_cap[1].to_string();
+                let Some(url_match) = url_cap.get(1) else {
+                    error!("Configured url_regex matched without capture group 1");
+                    continue;
+                };
+                let url_s = url_match.as_str().to_string();
                 info!("*** on {channel} detected url: {url_s}");
-                let mut dbc = start_db(&bot.url_log_db).await?;
-                info!(
-                    "Urllog: inserted {} row(s)",
-                    db_add_url(
-                        &mut dbc,
-                        &UrlCtx {
-                            ts: Utc::now().timestamp(),
-                            chan: channel.into(),
-                            nick: sender_nick.clone(),
-                            url: url_s,
-                        },
-                    )
-                    .await?
-                );
+                match db_add_url(
+                    &db,
+                    &UrlCtx {
+                        ts: Utc::now().timestamp(),
+                        chan: channel.into(),
+                        nick: sender_nick.clone(),
+                        url: url_s,
+                    },
+                )
+                .await
+                {
+                    Ok(rowcnt) => info!("Urllog: inserted {rowcnt} row(s)"),
+                    Err(e) => error!("Urllog insert failed on {channel}: {e:#}"),
+                }
             }
         }
     }
@@ -411,6 +447,7 @@ fn should_process_message(msg: &SlackMessageEvent) -> bool {
         msg.subtype,
         None | Some(SlackMessageEventType::BotMessage)
             | Some(SlackMessageEventType::MeMessage)
+            | Some(SlackMessageEventType::FileShare)
             | Some(SlackMessageEventType::ThreadBroadcast)
     )
 }
@@ -465,8 +502,12 @@ fn slack_user_fallback(user_id: &SlackUserId) -> String {
     format!("<@{}>", user_id.0)
 }
 
-fn channel_name<'a>(bot: &'a Bot, id: &'a str) -> &'a str {
-    match bot.channels.get(id) {
+fn channel_name<'a>(bot: &'a Bot, workspace_name: &str, id: &str) -> &'a str {
+    match bot
+        .channels
+        .get(workspace_name)
+        .and_then(|channels| channels.get(id))
+    {
         Some(s) => s.as_str(),
         None => "<NONE>",
     }
@@ -577,6 +618,49 @@ mod tests {
         };
 
         assert!(should_process_message(&msg));
+    }
+
+    #[test]
+    fn should_process_file_share_messages() {
+        let msg = SlackMessageEvent {
+            origin: SlackMessageOrigin::new(SlackTs("1234.5678".into())),
+            content: Some(SlackMessageContent::new().with_text("look at this".into())),
+            sender: SlackMessageSender::new(),
+            subtype: Some(SlackMessageEventType::FileShare),
+            hidden: None,
+            message: None,
+            previous_message: None,
+            deleted_ts: None,
+        };
+
+        assert!(should_process_message(&msg));
+    }
+
+    #[test]
+    fn channel_name_is_workspace_scoped() {
+        let bot = Bot {
+            channels: HashMap::from([
+                (
+                    "workspace-a".to_string(),
+                    HashMap::from([("C123".to_string(), "workspace-a-general".to_string())]),
+                ),
+                (
+                    "workspace-b".to_string(),
+                    HashMap::from([("C123".to_string(), "workspace-b-general".to_string())]),
+                ),
+            ]),
+            ..Bot::default()
+        };
+
+        assert_eq!(
+            channel_name(&bot, "workspace-a", "C123"),
+            "workspace-a-general"
+        );
+        assert_eq!(
+            channel_name(&bot, "workspace-b", "C123"),
+            "workspace-b-general"
+        );
+        assert_eq!(channel_name(&bot, "workspace-c", "C123"), "<NONE>");
     }
 
     #[test]

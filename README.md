@@ -8,6 +8,7 @@ configurable regex, and writes them into PostgreSQL.
 - Connects to one or more Slack workspaces through Socket Mode.
 - Validates each workspace at startup and builds a channel id to `workspace-channel` map.
 - Receives Slack push events and filters down to supported message events.
+- Logs supported message text to the console, including `file_share` messages such as images posted with text.
 - Extracts URLs from message text using a configured regular expression.
 - Resolves the sender name from the Slack event, cached user info, or a `users.info` lookup.
 - Inserts detected URLs into a PostgreSQL `url` table together with timestamp, channel, and sender name.
@@ -16,8 +17,9 @@ configurable regex, and writes them into PostgreSQL.
 ## Project layout
 
 - `src/bin/sjmb_slack.rs`: executable entrypoint.
+- `src/lib.rs`: module exports.
 - `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup.
-- `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, URL extraction flow.
+- `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, message logging, URL extraction flow.
 - `src/db_util.rs`: PostgreSQL connection helpers and insert retry logic.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`) and fails the build if metadata emission fails.
 - `config/sjmb_slack.json`: example runtime config.
@@ -34,6 +36,8 @@ configurable regex, and writes them into PostgreSQL.
 - `cargo fmt --check`
 - `cargo clippy --all-targets --all-features`
 - `cargo test`
+- `cargo update`
+- `cargo outdated`
 - `cargo build --release && ./install.sh`
 
 ## Runtime configuration
@@ -88,7 +92,7 @@ After changing scopes or event subscriptions in Slack, reinstall the app before 
 
 The repository includes a manifest you can import when creating or updating the Slack app:
 
-- [config/sjmb_slack.manifest.yaml](/home/sjm/git/Rust/sjmb-slack/config/sjmb_slack.manifest.yaml)
+- [config/sjmb_slack.manifest.yaml](config/sjmb_slack.manifest.yaml)
 
 What the manifest does not include:
 
@@ -130,8 +134,9 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 3. For each workspace, a Socket Mode listener is started.
 4. Callback behavior:
 
-- `handler_push_events`: forwards only relevant `Message` events into the channel. Edited, deleted,
-  hidden, and other unsupported message subtypes are ignored.
+- `handler_push_events`: forwards only relevant `Message` events into the channel. Plain, bot, me,
+  thread-broadcast, and file-share messages are supported; edited, deleted, hidden, and other unsupported message
+  subtypes are ignored.
 - `handler_interaction_events`: currently logs and returns `Ok(())`.
 - `handler_error`: logs the error and returns HTTP `200 OK` to acknowledge Slack retries.
 
@@ -141,7 +146,7 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 
 1. Resolves channel id to `workspace-channel` (or `"<NONE>"`).
 2. Resolves the sender name from message fields, a workspace-local cache, or `users.info`.
-3. Reads message text (if present).
+3. Logs message text if present.
 4. Runs `url_regex` captures over text.
 5. For each URL capture, opens a DB pool with `start_db(url_log_db)`.
 6. Calls `db_add_url()` with timestamp, channel, sender name, and URL.
