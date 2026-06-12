@@ -6,8 +6,8 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 - `src/bin/sjmb_slack.rs`: binary entrypoint (`main`) and CLI startup.
 - `src/lib.rs`: module exports.
 - `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
-- `src/slackbot.rs`: Slack Socket Mode handling, sender name lookup/cache, message filtering/logging, and URL extraction flow.
-- `src/db_util.rs`: PostgreSQL helpers and retry logic for URL inserts.
+- `src/slackbot.rs`: Slack Socket Mode handling, sender name lookup/cache, message queueing, message filtering/logging, and URL extraction flow.
+- `src/db_util.rs`: PostgreSQL helpers, transactional URL inserts, `url_changed` updates, and retry logic for URL inserts.
 - `config/sjmb_slack.json`: example runtime config template.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes and event subscriptions.
 - `build.rs`: injects build metadata (git commit/branch, compiler info) and fails the build if metadata emission fails.
@@ -23,7 +23,7 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 - `cargo clippy --all-targets --all-features`: linting pass.
 - `cargo test`: run unit/integration tests.
 - `cargo update`: update compatible dependency versions in `Cargo.lock`.
-- `cargo outdated`: report dependencies that can be updated.
+- `cargo outdated --root-deps-only`: report direct dependencies that can be updated.
 - `cargo build --release && ./install.sh`: build and install to local bin directory.
 
 ## Coding Style & Naming Conventions
@@ -32,6 +32,7 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 - Keep `clippy` clean with `cargo clippy --all-targets --all-features`; fix warnings rather than ignoring them unless there is a clear reason.
 - Naming: `snake_case` for functions/modules/files, `PascalCase` for structs/enums, `UPPER_SNAKE_CASE` for constants.
 - Prefer small, focused modules by concern (`config`, `slackbot`, `db_util`).
+- For async database access, keep `sqlx` runtime and TLS features explicit in `Cargo.toml`.
 
 ## Testing Guidelines
 There is currently no large committed test suite; add tests with each behavior change.
@@ -40,6 +41,7 @@ There is currently no large committed test suite; add tests with each behavior c
 - Integration tests: place in `tests/` for cross-module behavior.
 - Prefer deterministic tests (mock Slack payloads and DB boundaries where possible).
 - Run `cargo fmt`, `cargo test`, and `cargo clippy --all-targets --all-features` before submitting.
+- After direct dependency bumps, run `cargo check`, `cargo test`, and `cargo clippy --all-targets --all-features`.
 
 ## Commit & Pull Request Guidelines
 - Commit messages in history are short and imperative (example: `cargo update`).

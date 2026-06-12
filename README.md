@@ -8,6 +8,7 @@ configurable regex, and writes them into PostgreSQL.
 - Connects to one or more Slack workspaces through Socket Mode.
 - Validates each workspace at startup and builds a channel id to `workspace-channel` map.
 - Receives Slack push events and filters down to supported message events.
+- Queues supported messages through a bounded Tokio channel before serial database writes.
 - Logs supported message text to the console, including `file_share` messages such as images posted with text.
 - Extracts URLs from message text using a configured regular expression.
 - Resolves the sender name from the Slack event, cached user info, or a `users.info` lookup.
@@ -18,9 +19,9 @@ configurable regex, and writes them into PostgreSQL.
 
 - `src/bin/sjmb_slack.rs`: executable entrypoint.
 - `src/lib.rs`: module exports.
-- `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup.
-- `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, message logging, URL extraction flow.
-- `src/db_util.rs`: PostgreSQL connection helpers and insert retry logic.
+- `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
+- `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, bounded message queue, message logging, and URL extraction flow.
+- `src/db_util.rs`: PostgreSQL connection helpers, transactional URL inserts, `url_changed` updates, and insert retry logic.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`) and fails the build if metadata emission fails.
 - `config/sjmb_slack.json`: example runtime config.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes, Socket Mode, and event subscriptions.
@@ -37,8 +38,12 @@ configurable regex, and writes them into PostgreSQL.
 - `cargo clippy --all-targets --all-features`
 - `cargo test`
 - `cargo update`
-- `cargo outdated`
+- `cargo outdated --root-deps-only`
 - `cargo build --release && ./install.sh`
+
+Direct dependency updates should be checked with `cargo outdated --root-deps-only`. Compatible lockfile-only updates can
+usually be applied with `cargo update`; direct version bumps belong in `Cargo.toml` and should be followed by
+`cargo check`, `cargo test`, and `cargo clippy --all-targets --all-features`.
 
 ## Runtime configuration
 
@@ -129,12 +134,12 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 
 ### Event and message flow
 
-1. `Bot::run()` creates an unbounded Tokio MPSC channel for message processing.
-2. One task runs `handle_messages(rx)` and serially processes incoming message events.
+1. `Bot::run()` creates a bounded Tokio MPSC channel for message processing.
+2. One task runs `handle_messages(rx)` and serially processes queued message events.
 3. For each workspace, a Socket Mode listener is started.
 4. Callback behavior:
 
-- `handler_push_events`: forwards only relevant `Message` events into the channel. Plain, bot, me,
+- `handler_push_events`: forwards only relevant `Message` events into the bounded channel. Plain, bot, me,
   thread-broadcast, and file-share messages are supported; edited, deleted, hidden, and other unsupported message
   subtypes are ignored.
 - `handler_interaction_events`: currently logs and returns `Ok(())`.
@@ -148,7 +153,7 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 2. Resolves the sender name from message fields, a workspace-local cache, or `users.info`.
 3. Logs message text if present.
 4. Runs `url_regex` captures over text.
-5. For each URL capture, opens a DB pool with `start_db(url_log_db)`.
+5. For each URL capture, reuses the runtime DB pool created with `start_db(url_log_db)`.
 6. Calls `db_add_url()` with timestamp, channel, sender name, and URL.
 
 `db_add_url()` behavior:
