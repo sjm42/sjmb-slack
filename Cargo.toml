@@ -1,6 +1,6 @@
 [package]
 name = "sjmb_slack"
-version = "1.5.7"
+version = "1.6.0"
 edition = "2024"
 resolver = "2"
 authors = ["Sami J. Mäkinen <sjm@iki.fi>"]
@@ -33,7 +33,6 @@ sqlx = { version = "0.9", features = [
 tokio = { version = "1.52", features = ["full"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = "0.3"
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-native-roots"] }
 
 
 [build-dependencies]

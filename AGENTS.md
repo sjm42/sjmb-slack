@@ -7,7 +7,7 @@ This repository is a Rust 2024 crate with one executable and a small library cor
 - `src/lib.rs`: module exports.
 - `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
 - `src/slackbot.rs`: Slack Socket Mode handling, sender name lookup/cache, message queueing, message filtering/logging, and URL extraction flow.
-- `src/db_util.rs`: PostgreSQL helpers, transactional URL inserts, `url_changed` updates, and retry logic for URL inserts.
+- `src/db_util.rs`: PostgreSQL connection helpers and retry logic for URL inserts.
 - `config/sjmb_slack.json`: example runtime config template.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes and event subscriptions.
 - `build.rs`: injects build metadata (git commit/branch, compiler info) and fails the build if metadata emission fails.
@@ -52,4 +52,4 @@ There is currently no large committed test suite; add tests with each behavior c
 ## Security & Configuration Tips
 - Never commit real Slack tokens or production DB credentials.
 - Keep local secrets in your runtime config (for example `$HOME/sjmb_slack/config/sjmb_slack.json`), including both bot and app-level Socket Mode tokens.
-- Validate required PostgreSQL tables (`url`, `url_changed`) before deploying.
+- Apply the `urlharvest-rs` PostgreSQL migrations before deploying so the `url` table and its change-notification trigger exist.

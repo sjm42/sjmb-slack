@@ -393,10 +393,7 @@ async fn handle_msg(
     sender_nick: String,
 ) -> anyhow::Result<()> {
     let SlackMessageEvent {
-        origin,
-        content,
-        sender: _,
-        ..
+        origin, content, ..
     } = msg;
 
     if let Some(channel_id) = origin.channel {

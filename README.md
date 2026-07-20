@@ -13,7 +13,7 @@ configurable regex, and writes them into PostgreSQL.
 - Extracts URLs from message text using a configured regular expression.
 - Resolves the sender name from the Slack event, cached user info, or a `users.info` lookup.
 - Inserts detected URLs into a PostgreSQL `url` table together with timestamp, channel, and sender name.
-- Updates a `url_changed` marker table after inserts.
+- Relies on the database's `url` table trigger to publish change notifications after inserts.
 
 ## Project layout
 
@@ -21,7 +21,7 @@ configurable regex, and writes them into PostgreSQL.
 - `src/lib.rs`: module exports.
 - `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
 - `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, bounded message queue, message logging, and URL extraction flow.
-- `src/db_util.rs`: PostgreSQL connection helpers, transactional URL inserts, `url_changed` updates, and insert retry logic.
+- `src/db_util.rs`: PostgreSQL connection helpers and URL insert retry logic.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`) and fails the build if metadata emission fails.
 - `config/sjmb_slack.json`: example runtime config.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes, Socket Mode, and event subscriptions.
@@ -160,7 +160,8 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 
 - Executes `insert into url (seen, channel, nick, url) values (...)`.
 - Retries up to `RETRY_CNT = 5` with `RETRY_SLEEP = 1s` on failure.
-- Calls `db_mark_change()` (`update url_changed set last = $1`) if `update_change` is true.
+- Does not update a separate marker table. Database triggers installed by `urlharvest-rs` publish change notifications
+  when `url` is modified.
 
 ## License
 
