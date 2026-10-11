@@ -1884,9 +1884,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.152"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "1741ab7a6cc54a03a89b5d563ed60075c277d9e3cfa73ad0c1f23f23974703c6"
 dependencies = [
  "itoa",
  "memchr",
@@ -2069,9 +2069,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slack-morphism"
-version = "2.30.0"
+version = "2.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7284f78d055db307879cc71eb2b8cc411c6562626bda9453fca66831111cc200"
+checksum = "ffc35f287431415f15d6aead55508f0ea9ab9f70f7f3cde1ffb3fb3e30e2e8f1"
 dependencies = [
  "async-recursion",
  "async-trait",
