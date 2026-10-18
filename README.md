@@ -168,6 +168,95 @@ but has not been validated against a real user session on your VM.
 Socket Mode and user-session processes do not share duplicate detection state. Use the probe for side-by-side
 validation with the existing bot; running both as writers can insert the same messages' URLs twice.
 
+### Get the session token and cookies from Firefox
+
+Do this on your desktop or laptop. Firefox must be signed into Slack itself; a login in the native Slack app is a
+separate session. A dedicated Firefox profile is convenient for keeping the bot's source session separate from
+everyday browsing. If you use Firefox containers, obtain both credentials in the same container.
+
+1. Visit `https://YOUR-WORKSPACE.slack.com/customize` in Firefox and sign in. Check that the page belongs to the
+   workspace you want to harvest. You can also start at <https://my.slack.com/customize> and select the workspace.
+2. Press **Ctrl+Shift+K** to open the page's Web Console, then run:
+
+   ```javascript
+   window.prompt("Session token:", TS.boot_data.api_token)
+   ```
+
+   Copy the complete `xoxc-...` value from the prompt. This becomes `api_token` in the workspace configuration.
+3. Open Developer Tools' **Storage** tab, using **Shift+F9** or selecting Storage from the tools menu. Expand
+   **Cookies**, then select the Slack origin. Look for a row whose **Name** is `d` and **Domain** is `.slack.com`.
+4. Copy that row's complete **Value**. If there is also a `d-s` cookie for Slack, copy its value too. Use the actual
+   values, not a shortened table preview; selecting the cookie displays its details. Preserve percent escapes such
+   as `%2F` exactly. The configuration needs the cookie names as well as their values:
+
+   ```json
+   {
+     "name": "your-workspace-label",
+     "api_token": "xoxc-YOUR-COMPLETE-TOKEN",
+     "cookie": "d=YOUR-COMPLETE-D-VALUE; d-s=YOUR-COMPLETE-D-S-VALUE"
+   }
+   ```
+
+   If there is no `d-s` cookie, use only `"cookie": "d=YOUR-COMPLETE-D-VALUE"`. This object belongs inside the
+   `workspaces` array of the sample user-session config. Omit `socket_token` and keep `dry_run` enabled initially.
+5. Save your populated configuration outside the repository and copy it to the cloud VM over SSH/SCP. The VM only
+   needs the credential values; Firefox can be closed and the desktop/laptop can be powered off.
+
+If the console command reports `TS is not defined`, use the Slack web client in that same Firefox profile/container.
+Open **Network** with **Ctrl+Shift+E**, reload the page, filter for `/api/`, and select a Slack API request. Look in its
+**Request** parameters for `token`, or in **Headers** for `Authorization: Bearer xoxc-...`. Copy just the `xoxc-...`
+token, excluding `Bearer `. Then obtain the matching cookies through Storage as above. The outgoing request's raw
+Cookie header is also useful for checking the exact encoded cookie values.
+
+Keep the token and cookies from the same Firefox session. Each workspace needs its own token. Signing out,
+session expiration, or changes to the browser login can invalidate the exported credentials; obtain fresh values
+and restart the bot when that happens.
+
+References: [wee-slack session extraction](https://github.com/wee-slack/wee-slack#get-a-session-token),
+[Firefox Storage Inspector](https://firefox-source-docs.mozilla.org/devtools-user/storage_inspector/index.html), and
+[Firefox request details](https://firefox-source-docs.mozilla.org/devtools-user/network_monitor/request_details/index.html).
+
+### Several workspaces in one Firefox profile
+
+Each workspace has its own `xoxc-...` token. The `.slack.com` session cookie is normally shared by workspaces signed
+into the same Firefox profile/container. Adding another login can change that cookie, making an earlier exported
+token/cookie pair stale. Separate profiles are not normally required for each workspace.
+
+1. Sign into all desired workspaces first, without signing out between them.
+2. Open each workspace and extract its own current `xoxc-...` token.
+3. After completing the logins, copy the current `d` cookie and `d-s` if present. Use that current Cookie header in
+   each workspace entry from this browser session. If an older token still fails, re-extract it from its workspace.
+4. Restart the bot with `dry_run` enabled and check the authenticated team/user IDs logged for each entry.
+
+For example, inside your user-session config:
+
+```json
+{
+  "workspaces": [
+    {
+      "name": "workspace-a",
+      "api_token": "xoxc-TOKEN-FOR-A",
+      "cookie": "d=CURRENT-SHARED-D-VALUE; d-s=CURRENT-SHARED-D-S-VALUE"
+    },
+    {
+      "name": "workspace-b",
+      "api_token": "xoxc-TOKEN-FOR-B",
+      "cookie": "d=CURRENT-SHARED-D-VALUE; d-s=CURRENT-SHARED-D-S-VALUE"
+    }
+  ]
+}
+```
+
+Omit `d-s` if absent. The bot calls `auth.test` to learn the actual workspace/account for each token; `name` only
+controls the stored channel label. Reusing the identical token/cookie pair does not select a different workspace,
+and configuring the same authenticated workspace/account twice fails on its recovery-state lock.
+
+For independent browser login lifetimes, use a Firefox profile or container per workspace instead. In that case,
+export each workspace's token and cookies from its own profile/container; do not share cookies between them.
+The shared-cookie arrangement is also demonstrated by
+[wee-slack's extractor](https://github.com/wee-slack/wee-slack/blob/master/extract_token_from_browser.py), which pairs
+each discovered workspace token with the same browser cookie.
+
 ### Disconnect recovery
 
 - `recovery.state_dir` defaults to `$HOME/.local/state/sjmb-slack` and supports environment/tilde expansion.
