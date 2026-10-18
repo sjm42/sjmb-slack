@@ -1743,9 +1743,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rvs_derive"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "496d8960181ebb22b9860b8c1d640b054dfd356716d3741bdb7fd341419e48ac"
+checksum = "a2c606655bc347ab5ffcc41853a3705a2fe7b2e6564fbc95bd8c4075fa9e1f61"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1754,9 +1754,9 @@ dependencies = [
 
 [[package]]
 name = "rvstruct"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae1a01602ce39076474f938e60a40451831951165c870b4cc3fbe30c5be07769"
+checksum = "74210d04e936dd1f3e4d842cf7e3fb2edbeff74505a27ca23aafa60f4a1933de"
 dependencies = [
  "rvs_derive",
 ]
