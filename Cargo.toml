@@ -1,6 +1,6 @@
 [package]
 name = "sjmb_slack"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2024"
 resolver = "2"
 authors = ["Sami J. Mäkinen <sjm@iki.fi>"]
@@ -11,7 +11,7 @@ keywords = ["slack", "bot"]
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["socket-mode"]
+default = ["socket-mode", "user-session"]
 socket-mode = ["slack-morphism/axum"]
 user-session = ["dep:tokio-tungstenite", "dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:http-body-util", "dep:bytes"]
 
