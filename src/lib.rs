@@ -1,5 +1,7 @@
 // lib.rs
 
+#![forbid(unsafe_code)]
+
 pub use chrono::Utc;
 pub use clap::Parser;
 pub use tracing::{Level, debug, error, info, warn};
@@ -14,5 +16,8 @@ pub use db_util::*;
 
 pub mod slackbot;
 pub use slackbot::*;
+
+mod harvest;
+mod limits;
 
 // EOF

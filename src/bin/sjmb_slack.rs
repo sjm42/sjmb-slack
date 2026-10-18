@@ -6,7 +6,7 @@ use sjmb_slack::*;
 async fn main() -> anyhow::Result<()> {
     let mut opts = OptsCommon::parse();
     opts.finalize()?;
-    opts.start_pgm(env!("CARGO_BIN_NAME"));
+    opts.start_pgm(env!("CARGO_BIN_NAME"))?;
 
     let bot = Bot::new(&opts).await?;
     bot.run().await?;

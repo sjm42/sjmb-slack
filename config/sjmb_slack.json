@@ -1,11 +1,11 @@
 {
-    "url_regex": "<(https?://[^>]+)>",
-    "url_log_db": "postgres:///url",
-    "workspaces": [
-        {
-            "name": "foo",
-            "api_token": "abc-123",
-            "socket_token": "xyz-321"
-        }
-    ]
+  "url_regex": "<(https?://[^>]+)>",
+  "url_log_db": "postgres:///url?sslmode=disable",
+  "workspaces": [
+    {
+      "name": "foo",
+      "api_token": "abc-123",
+      "socket_token": "xyz-321"
+    }
+  ]
 }

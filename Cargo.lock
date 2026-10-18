@@ -1677,9 +1677,9 @@ dependencies = [
 
 [[package]]
 name = "rsb_derive"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17cbcc28134aef8442f79f76d4a0f6e90aa9f9b5a5e4ceac633a0e1bcf879117"
+checksum = "87efd91492ad9ef8521a3c2ce95eb45831c84d94469c876b8e6f69f7b03e874b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2041,14 +2041,19 @@ dependencies = [
 
 [[package]]
 name = "sjmb_slack"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "anyhow",
  "build-data",
+ "bytes",
  "chrono",
  "clap",
  "futures",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "regex",
  "rustls",
  "serde",
@@ -2057,8 +2062,10 @@ dependencies = [
  "slack-morphism",
  "sqlx",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

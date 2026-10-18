@@ -1,11 +1,11 @@
 # sjmb_slack
 
-`sjmb_slack` is a Slack bot (Socket Mode) written in Rust that listens to message events, extracts URLs with a
+`sjmb_slack` is a Slack URL harvester written in Rust with Socket Mode and optional user-session backends. It listens to message events, extracts URLs with a
 configurable regex, and writes them into PostgreSQL.
 
 ## What the program does
 
-- Connects to one or more Slack workspaces through Socket Mode.
+- Connects to one or more Slack workspaces through Socket Mode or the optional user-session backend.
 - Validates each workspace at startup and builds a channel id to `workspace-channel` map.
 - Receives Slack push events and filters down to supported message events.
 - Queues supported messages through a bounded Tokio channel before serial database writes.
@@ -20,8 +20,13 @@ configurable regex, and writes them into PostgreSQL.
 - `src/bin/sjmb_slack.rs`: executable entrypoint.
 - `src/lib.rs`: module exports.
 - `src/config.rs`: CLI flags, config path expansion, tracing setup, rustls provider setup, and runtime initialization.
-- `src/slackbot.rs`: bot config model, Slack API/socket setup, sender name lookup/cache, event handlers, bounded message queue, message logging, and URL extraction flow.
-- `src/db_util.rs`: PostgreSQL connection helpers and URL insert retry logic.
+- `src/slackbot.rs`: configuration, shared sender/channel lookups, message queue, message logging, and harvesting pipeline.
+- `src/slackbot/socket_mode.rs`: existing app/bot transport and supervision.
+- `src/slackbot/user_session.rs`: read-only user websocket transport and message admission.
+- `src/slackbot/user_session/`: bounded session HTTP client, persistent recovery state, and history recovery.
+- `src/db_util.rs`: lazy PostgreSQL pool and bounded URL inserts.
+- `src/harvest.rs`: Slack link decoding, URL validation/limits, and message timestamps.
+- `src/limits.rs`: bounded expiring caches, discard counters, and console text bounds.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`) and fails the build if metadata emission fails.
 - `config/sjmb_slack.json`: example runtime config.
 - `config/sjmb_slack.manifest.yaml`: Slack app manifest for scopes, Socket Mode, and event subscriptions.
@@ -52,7 +57,7 @@ The bot reads a JSON file (default: `$HOME/sjmb_slack/config/sjmb_slack.json`):
 ```json
 {
   "url_regex": "<(https?://[^>]+)>",
-  "url_log_db": "postgres:///url",
+  "url_log_db": "postgres:///url?sslmode=disable",
   "workspaces": [
     {
       "name": "foo",
@@ -65,7 +70,8 @@ The bot reads a JSON file (default: `$HOME/sjmb_slack/config/sjmb_slack.json`):
 
 Fields:
 
-- `url_regex`: regex used to find URLs in message text. The bot stores capture group `1`.
+- `url_regex`: regex used to find URLs in message text. Capture group `1` is required; optional captures that did
+  not match are skipped. Slack link labels are removed and entities decoded before HTTP/HTTPS URL validation.
 - `url_log_db`: PostgreSQL connection string used by `sqlx`.
 - `workspaces`: Slack workspace list.
 
@@ -73,7 +79,17 @@ Workspace entry fields:
 
 - `name`: prefix used when building channel labels (`workspace-channel`).
 - `api_token`: bot token for Web API calls (startup validation and channel discovery).
-- `socket_token`: app-level token for Socket Mode listener.
+- `socket_token`: app-level token for Socket Mode listener, from the same app as the bot token.
+
+Configuration is limited to 1 MiB and validated before contacting Slack. At least one workspace is required;
+workspace names and socket tokens must be unique, and tokens must be nonempty. Each listener is for one workspace/app
+installation. The bot validates the bot token with `auth.test`, resolves the app with `bots.info`, verifies the Socket
+Mode hello's app ID, and checks incoming event workspace/app IDs. Duplicate installations are rejected.
+
+SQLx TLS support remains compiled in. For local connections, SSH tunnels, or WireGuard deployments where PostgreSQL
+TLS is unnecessary, set `sslmode=disable` in the connection URL as shown above. Append `&sslmode=disable` when other
+query parameters already exist. This explicitly skips negotiation; omitting it leaves SQLx's default `prefer` policy.
+The program does not override your configured TLS mode.
 
 ## Slack app setup
 
@@ -113,6 +129,81 @@ Typical setup flow:
 5. Copy the bot token (`xoxb-...`) and app token (`xapp-...`) into `config/sjmb_slack.json`.
 6. Invite the bot to the channels you want monitored.
 
+## User-session backend
+
+This optional backend connects using your own Slack session. It harvests joined public/private channels, including
+your own posts and ordinary thread replies. DMs, group DMs, edits, deletions, hidden messages, and unsupported subtypes
+are excluded. It never calls read-marker, presence, typing, or message-writing methods. Reading history does not mark
+messages read. Verify unread markers and any incidental presence effects with your normal Slack clients during the live test.
+
+Build two versions into separate directories:
+
+```sh
+cargo build --release --target-dir target/socket
+cargo build --release --no-default-features --features user-session --target-dir target/user
+```
+
+Socket Mode remains the default feature. A binary built with only `user-session` defaults to that backend. When both
+features are compiled (`--all-features`), set `"backend": "user-session"` to select it; omitted `backend` retains Socket
+Mode for existing configurations. Selecting a backend not compiled into the binary fails during configuration validation.
+
+Start with [config/sjmb_slack.user-session.json](config/sjmb_slack.user-session.json). Fill in the token beginning with
+`xoxc-` and the matching Cookie header from the same browser/native-client session, for example
+`d=<exact value>; d-s=<value if required>`. Preserve percent encoding. No `socket_token` is used. Session acquisition is
+manual; the bot neither reads your browser profile nor automates sign-in. See
+[wee-slack's extraction instructions](https://github.com/wee-slack/wee-slack#get-a-session-token).
+
+The sample enables `"dry_run": true`. This logs messages and extracted URLs without database inserts and keeps
+checkpoints in a separate `probe/` state directory. For a live acceptance test:
+
+```sh
+target/user/release/sjmb_slack --verbose --bot-config /path/to/your/user-session.json
+```
+
+Check messages in unopened public/private channels, your own messages, thread replies, unchanged unread markers,
+and recovery after a brief disconnection/restart. Set `dry_run` to `false` to enable harvesting. The database pool is
+lazy, so a probe does not connect to PostgreSQL. The current implementation has automated local HTTP/websocket tests
+but has not been validated against a real user session on your VM.
+
+Socket Mode and user-session processes do not share duplicate detection state. Use the probe for side-by-side
+validation with the existing bot; running both as writers can insert the same messages' URLs twice.
+
+### Disconnect recovery
+
+- `recovery.state_dir` defaults to `$HOME/.local/state/sjmb-slack` and supports environment/tilde expansion.
+  One locked state file per workspace/account prevents concurrent instances from sharing progress. Keep this directory
+  across restarts. State stores Slack IDs, bot checkpoints, recent message IDs and tracked threads, not credentials.
+- `recovery.window_seconds` defaults to **86400** (24 hours), configurable from 1 second to 7 days. Existing checkpoints
+  older than the window are clipped with a warning. With no checkpoint, the bot starts from its connection time.
+- After reconnecting, the live socket continues receiving while channel history and recently tracked threads are
+  recovered through the fixed connection boundary. A two-minute overlap and full Slack timestamps suppress duplicates.
+  The bot uses its own progress, never your account's `last_read` position.
+- Checkpoints advance after worker acknowledgement and successful inserts, never merely after queue admission.
+  Incomplete recovery stays pending and retries every minute. Ordinary database/queue failures reconnect and trigger
+  recovery; invalid session credentials stop with an actionable error. Replace expired tokens and matching cookies manually.
+- `recovery.max_pages_per_channel` defaults to **100** pages per history/thread request sequence (200 messages requested
+  per page), configurable from 1 to 1000. Hitting the cap leaves progress pending and logs an error; increase the cap
+  if needed. Recovery observes `Retry-After`; no fixed OAuth rate allowance is assumed for browser sessions.
+- Progress is snapshotted on ordered heartbeat barriers, completed recovery, disconnect and shutdown using atomic file
+  replacement. Memory/disk state is capped at 4096 channels, 4096 recent threads and 32768 recent message IDs; oldest
+  thread/duplicate entries can be evicted. HTTP responses are limited to 4 MiB and websocket messages/frames to 1 MiB,
+  before the common 64 KiB message-text limit. Requests/connection startup have deadlines, and heartbeat loss reconnects.
+
+Recovery is best effort: replies to old untracked threads, deleted/inaccessible messages, outages exceeding the recovery
+window, and limit exhaustion can leave gaps. A crash between a successful database insert and a persisted checkpoint
+can duplicate an insert. There is no PostgreSQL schema change or transaction spanning the database and local state.
+The websocket protocol is private and can change. Authenticated HTTP requests never follow redirects, websocket
+destinations must use TLS on a `slack.com` subdomain, and only six explicitly allowed read-only API methods are available.
+
+Validate both individual feature builds and their combination when developing:
+
+```sh
+cargo test
+cargo test --no-default-features --features user-session
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 ## CLI flags
 
 - `-v`, `--verbose`: `INFO` logs.
@@ -120,7 +211,9 @@ Typical setup flow:
 - `-t`, `--trace`: `TRACE` logs.
 - `-b`, `--bot-config <PATH>`: config JSON path (supports env expansion, for example `$HOME/...`).
 
-If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
+If none of `verbose/debug/trace` are set, log level defaults to `ERROR`. Dependencies follow the selected level up to
+INFO; DEBUG and TRACE apply to this application's code. Message console output is normalized to one line and bounded
+to 4 KiB. Debug output may include credentials and complete SDK payloads; credential redaction is not provided.
 
 ## Program internals
 
@@ -129,39 +222,72 @@ If none of `verbose/debug/trace` are set, log level defaults to `ERROR`.
 1. `main` parses `OptsCommon` with `clap`.
 2. `finalize()` expands `bot_config` path with `shellexpand`.
 3. `start_pgm()` initializes tracing and logs build metadata from `build.rs` env vars.
-4. `Bot::new()` loads JSON config, compiles `url_regex`, validates each workspace with `api_test`, and fetches channels
-   to build an internal channel id -> name map.
+4. `Bot::new()` loads and validates JSON configuration and compiles `url_regex` without network activity.
+5. `Bot::run()` creates a lazy database pool, authenticates each workspace, discovers public and private channels,
+   and starts Socket Mode listeners. Each listener must receive its first valid hello within 30 seconds.
+
+Authentication and app lookup each have a 10-second deadline; paginated channel discovery has a 30-second deadline.
+Unrecovered session/startup failures trigger cleanup and retries with delays growing from 2 to 30 seconds plus up to
+one second of jitter. Startup rate limits honor `Retry-After`; a session healthy for a minute resets the backoff.
+The SDK continues to handle ordinary socket reconnects. Local configuration errors fail before retries begin.
 
 ### Event and message flow
 
 1. `Bot::run()` creates a bounded Tokio MPSC channel for message processing.
-2. One task runs `handle_messages(rx)` and serially processes queued message events.
+2. One scoped worker runs `handle_messages(rx)` and serially processes queued message events.
 3. For each workspace, a Socket Mode listener is started.
 4. Callback behavior:
 
-- `handler_push_events`: forwards only relevant `Message` events into the bounded channel. Plain, bot, me,
+- `handler_push_events`: filters and immediately submits relevant `Message` events without network lookups or waiting
+  for queue space. Plain, bot, me,
   thread-broadcast, and file-share messages are supported; edited, deleted, hidden, and other unsupported message
   subtypes are ignored.
-- `handler_interaction_events`: currently logs and returns `Ok(())`.
-- `handler_error`: logs the error and returns HTTP `200 OK` to acknowledge Slack retries.
+- `handler_interaction_events`: logs at DEBUG and returns `Ok(())`.
+- `handler_error`: obtains diagnostic state nonblockingly. An unavailable worker requests redelivery; ordinary SDK
+  errors are logged and acknowledged. Identity/authentication failures trigger supervised session cleanup.
+
+The queue holds 256 messages, retaining only required text, sender fields, attribution, and timing. Messages over
+64 KiB are discarded whole. Queued work expires three minutes after receipt; already-started processing may finish.
+A full queue discards new messages and acknowledges them. Event IDs are remembered only after successful admission,
+in an installation-scoped cache of at most 8,192 entries for 15 minutes. This suppresses redelivery duplicates, not
+legitimate repeated posts of the same URL. The cache survives session retries but resets when the process restarts.
+
+Discard counts for overflow, expiry, oversized input, and invalid input are reported every 30 seconds at ERROR and
+again on exit. Duplicate counts are reported at DEBUG. There are no per-workspace fairness budgets.
+
+SIGINT/SIGTERM stops admission, explicitly shuts down each SDK listener (up to five seconds each), and allows the
+worker up to ten seconds to drain. The worker is cancelled when that budget expires and cannot survive a reconnect.
 
 ### URL extraction and DB writes
 
 `handle_msg()`:
 
-1. Resolves channel id to `workspace-channel` (or `"<NONE>"`).
+1. Resolves channel id to `workspace-channel`, or `workspace-CHANNEL_ID` if lookup is unavailable.
 2. Resolves the sender name from message fields, a workspace-local cache, or `users.info`.
 3. Logs message text if present.
-4. Runs `url_regex` captures over text.
+4. Examines at most four `url_regex` matches over text, removes Slack link labels, decodes `&amp;`, `&lt;`, and `&gt;`
+   exactly once, and validates/normalizes HTTP/HTTPS URLs. URLs exceeding **2,048 UTF-8 bytes** before or after
+   normalization are skipped whole. Stored URLs are never truncated.
 5. For each URL capture, reuses the runtime DB pool created with `start_db(url_log_db)`.
-6. Calls `db_add_url()` with timestamp, channel, sender name, and URL.
+6. Calls `db_add_url()` with the original Slack message timestamp (whole seconds), channel, sender name, and URL.
+
+Sender and channel caches each retain at most 4,096 entries per workspace. Sender names expire after an hour;
+channel names after ten minutes, allowing renamed/new channels to be discovered. Failed lookups expire after 30
+seconds. Each lookup has a three-second deadline, and rate limits defer that API's further lookups until `Retry-After`.
+Lookup failure falls back to a user ID or workspace/channel ID and does not prevent URL harvesting.
 
 `db_add_url()` behavior:
 
 - Executes `insert into url (seen, channel, nick, url) values (...)`.
-- Retries up to `RETRY_CNT = 5` with `RETRY_SLEEP = 1s` on failure.
+- Uses a lazy pool of at most four connections, with a three-second acquisition timeout. A database outage does not
+  prevent Slack startup. Each connection sets a five-second statement timeout and one-second lock timeout.
+- Bounds each insert to eight seconds overall, logs failures, and continues without application-level retries.
 - Does not update a separate marker table. Database triggers installed by `urlharvest-rs` publish change notifications
   when `url` is modified.
+
+Harvesting is best effort: crashes, full/expired queues, failed inserts, or a shutdown drain timeout can lose URLs.
+There is no durable spool, exactly-once delivery, or database schema change. URLs are stored without being fetched;
+downstream fetchers remain responsible for their own destination, response-size, and rendering policies.
 
 ## License
 
