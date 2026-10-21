@@ -3,6 +3,7 @@
   "dry_run": true,
   "url_regex": "<(https?://[^>]+)>",
   "url_log_db": "postgres:///url?sslmode=disable",
+  "url_blacklist": [],
   "recovery": {
     "state_dir": "$HOME/sjmb_slack/state",
     "window_seconds": 86400,
@@ -11,6 +12,7 @@
   "workspaces": [
     {
       "name": "foo",
+      "url_blacklist": [],
       "api_token": "xoxc-REPLACE-ME",
       "cookie": "d=REPLACE-ME"
     }

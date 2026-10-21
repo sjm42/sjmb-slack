@@ -12,6 +12,7 @@ configurable regex, and writes them into PostgreSQL.
 - Logs supported message text to the console, including `file_share` messages such as images posted with text.
 - Extracts URLs from message text using a configured regular expression.
 - Resolves the sender name from the Slack event, cached user info, or a `users.info` lookup.
+- Excludes blacklisted domains/IPs and non-public or unresolvable destinations before database insertion.
 - Inserts detected URLs into a PostgreSQL `url` table together with timestamp, channel, and sender name.
 - Relies on the database's `url` table trigger to publish change notifications after inserts.
 
@@ -26,6 +27,7 @@ configurable regex, and writes them into PostgreSQL.
 - `src/slackbot/user_session/`: bounded session HTTP client, persistent recovery state, and history recovery.
 - `src/db_util.rs`: lazy PostgreSQL pool and bounded URL inserts.
 - `src/harvest.rs`: Slack link decoding, URL validation/limits, and message timestamps.
+- `src/url_filter.rs`: global/workspace host rules, DNS resolution, and public-address policy.
 - `src/limits.rs`: bounded expiring caches, discard counters, and console text bounds.
 - `build.rs`: injects build metadata (`GIT_BRANCH`, `GIT_COMMIT`, `SOURCE_TIMESTAMP`, `RUSTC_VERSION`) and fails the build if metadata emission fails.
 - `config/sjmb_slack.json`: example runtime config.
@@ -73,6 +75,7 @@ Fields:
 - `url_regex`: regex used to find URLs in message text. Capture group `1` is required; optional captures that did
   not match are skipped. Slack link labels are removed and entities decoded before HTTP/HTTPS URL validation.
 - `url_log_db`: PostgreSQL connection string used by `sqlx`.
+- `url_blacklist`: optional global list of DNS names or IP addresses to exclude from the database; defaults to `[]`.
 - `workspaces`: Slack workspace list.
 
 Workspace entry fields:
@@ -80,6 +83,28 @@ Workspace entry fields:
 - `name`: prefix used when building channel labels (`workspace-channel`).
 - `api_token`: bot token for Web API calls (startup validation and channel discovery).
 - `socket_token`: app-level token for Socket Mode listener, from the same app as the bot token.
+- `url_blacklist`: optional additional exclusions for this workspace; defaults to `[]`. Global exclusions always apply.
+
+For example, put `"url_blacklist": ["example.com", "internal.example.org"]` at the top level to exclude those
+domains everywhere, and `"url_blacklist": ["noisy.example.net"]` inside a workspace entry to add a local exclusion.
+A DNS rule includes the named host and **all its subdomains**. There are no wildcards, regexes, or allowlist overrides.
+Use hostnames only, without schemes, ports, paths, or queries. IP rules match exact addresses, including DNS answers;
+IPv6 rules accept bare or bracketed addresses. Invalid entries fail startup with their scope and entry number.
+DNS names use lowercase ASCII/IDNA spelling and exactly one trailing dot internally; either trailing-dot spelling is
+accepted in configuration. Filtering does not add a trailing dot to stored URLs. Restart to apply configuration changes.
+
+Every candidate URL also passes a public-address check, even when both blacklists are empty. IP literals are checked
+directly. Other hosts are resolved using the system resolver with an absolute DNS name and a **three-second** deadline.
+There is no application DNS cache. A URL is excluded if any returned address is non-public, if resolution fails or times
+out, or if it returns zero or more than 64 addresses. The conservative address policy matches `sjmb`'s HTTP fetcher:
+it excludes private, loopback, link-local, shared/CGNAT, documentation, multicast, reserved, and IPv6 translation/tunnelling
+ranges. DNS results reflect the bot machine's resolver configuration, including VPN/split DNS.
+
+Exclusion skips only database insertion. Messages and detected URLs still appear in logs, with the exclusion reason at
+INFO (`--verbose`). Excluded URLs count as successfully processed for recovery; temporary DNS failures can therefore
+lose otherwise acceptable URLs. Live events, recovered history/thread replies, and dry runs use the same policy.
+Existing rows are not removed, and removing a rule does not replay previously excluded messages. No HTTP request or
+redirect following is performed. Downstream fetchers must still check their own DNS results and redirect destinations.
 
 Configuration is limited to 1 MiB and validated before contacting Slack. At least one workspace is required;
 workspace names and socket tokens must be unique, and tokens must be nonempty. Each listener is for one workspace/app
@@ -354,10 +379,11 @@ worker up to ten seconds to drain. The worker is cancelled when that budget expi
 1. Resolves channel id to `workspace-channel`, or `workspace-CHANNEL_ID` if lookup is unavailable.
 2. Resolves the sender name from message fields, a workspace-local cache, or `users.info`.
 3. Logs message text if present.
-4. Examines at most four `url_regex` matches over text, removes Slack link labels, decodes `&amp;`, `&lt;`, and `&gt;`
+4. Examines at most 16 `url_regex` matches over text, removes Slack link labels, decodes `&amp;`, `&lt;`, and `&gt;`
    exactly once, and validates/normalizes HTTP/HTTPS URLs. URLs exceeding **2,048 UTF-8 bytes** before or after
    normalization are skipped whole. Stored URLs are never truncated.
-5. For each URL capture, reuses the runtime DB pool created with `start_db(url_log_db)`.
+5. Applies the combined global/workspace blacklist and public-address/DNS policy. Invalid and excluded URLs still
+   count toward the 16-match limit. Allowed URLs reuse the runtime DB pool created with `start_db(url_log_db)`.
 6. Calls `db_add_url()` with the original Slack message timestamp (whole seconds), channel, sender name, and URL.
 
 Sender and channel caches each retain at most 4,096 entries per workspace. Sender names expire after an hour;

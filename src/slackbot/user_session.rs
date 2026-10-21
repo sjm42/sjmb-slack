@@ -144,6 +144,7 @@ impl Session {
             .with_cookie(config.cookie.clone().into());
         let workspace = Arc::new(Workspace {
             name: config.name.clone(),
+            url_filter: config.url_filter.clone(),
             team_id: team.into(),
             #[cfg(feature = "socket-mode")]
             app_id: format!("user-session-{user}").into(),

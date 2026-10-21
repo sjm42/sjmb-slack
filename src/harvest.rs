@@ -7,7 +7,7 @@ use url::Url;
 use crate::limits::Counters;
 
 pub(crate) const MAX_URL_BYTES: usize = 2048;
-pub(crate) const MAX_URLS_PER_MESSAGE: usize = 4;
+pub(crate) const MAX_URLS_PER_MESSAGE: usize = 16;
 
 pub(crate) fn message_timestamp(ts: &str) -> anyhow::Result<i64> {
     let (seconds, fraction) = ts.split_once('.').unwrap_or((ts, ""));
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn work_is_bounded_and_optional_empty_invalid_captures_are_safe() {
         assert_eq!(
-            urls(&"<https://example.com/> ".repeat(10)).len(),
+            urls(&"<https://example.com/> ".repeat(20)).len(),
             MAX_URLS_PER_MESSAGE
         );
         assert!(

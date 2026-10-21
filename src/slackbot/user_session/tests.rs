@@ -67,6 +67,7 @@ async fn fixture(responses: Vec<Value>) -> Fixture {
     let client = Arc::new(SlackClient::new(SlackClientHyperConnector::new().unwrap()));
     let workspace = Arc::new(Workspace {
         name: "test".into(),
+        url_filter: UrlFilter::default(),
         team_id: "T1".into(),
         #[cfg(feature = "socket-mode")]
         app_id: "A1".into(),
@@ -324,7 +325,10 @@ async fn dry_run_logs_urls_without_connecting_to_database() {
         Instant::now(),
         CHANNEL_TTL,
     );
-    let (message, _, _) = normalise(message("1234.000001"), &f.session.counters).unwrap();
+    let mut event = message("1234.000001");
+    // Exercise the allowed path without depending on external DNS.
+    event["text"] = json!("<https://8.8.8.8/>");
+    let (message, _, _) = normalise(event, &f.session.counters).unwrap();
     let mut queued =
         prepare_message(f.session.workspace.clone(), message, &f.session.counters).unwrap();
     queued.dry_run = true;
@@ -355,6 +359,80 @@ async fn queue_overflow_requests_reconnect_and_counts_loss() {
             .is_err()
     );
     assert_eq!(f.session.counters.full.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn excluded_history_urls_complete_recovery_without_database_access() {
+    let at = now();
+    let ts = format!("{}.000001", at - 10);
+    let mut f = fixture(vec![json!({"ok":true, "messages":[message(&ts)]})]).await;
+    let session = Arc::get_mut(&mut f.session).unwrap();
+    Arc::get_mut(&mut session.workspace).unwrap().url_filter =
+        UrlFilter::compile(&["example.com".into()], "test").unwrap();
+    lock(&session.workspace.channels).insert(
+        "C1".into(),
+        "general".into(),
+        Instant::now(),
+        CHANNEL_TTL,
+    );
+    let rx = std::mem::replace(&mut f.rx, mpsc::channel(1).1);
+    let (drain_tx, drain_rx) = watch::channel(false);
+    let db = start_db("postgres://localhost:1/url?sslmode=disable")
+        .await
+        .unwrap();
+    // A closed pool makes any accidental database call fail immediately.
+    db.dbc.close().await;
+    let regex = Regex::new("<(https?://[^>]+)>").unwrap();
+    let worker = handle_messages(rx, &regex, &db, &f.session.counters, drain_rx);
+    let recovery = async {
+        let result = f.session.recover_channel("C1", at - 60, at).await;
+        drain_tx.send(true).unwrap();
+        result
+    };
+    let (worker, recovery) = tokio::join!(worker, recovery);
+    worker.unwrap();
+    recovery.unwrap();
+    assert!(f.session.store.seen("C1", &ts));
+    assert_eq!(db.dbc.size(), 0);
+}
+
+#[tokio::test]
+async fn excluding_one_url_does_not_skip_allowed_urls_in_the_same_message() {
+    let mut f = fixture(vec![]).await;
+    let session = Arc::get_mut(&mut f.session).unwrap();
+    Arc::get_mut(&mut session.workspace).unwrap().url_filter =
+        UrlFilter::compile(&["example.com".into()], "test").unwrap();
+    lock(&session.workspace.channels).insert(
+        "C1".into(),
+        "general".into(),
+        Instant::now(),
+        CHANNEL_TTL,
+    );
+    let db = start_db("postgres://localhost:1/url?sslmode=disable")
+        .await
+        .unwrap();
+    db.dbc.close().await;
+    let regex = Regex::new("<(https?://[^>]+)>").unwrap();
+    for (text, succeeds) in [
+        ("<https://example.com/> <http://127.0.0.1/>", true),
+        (
+            "<https://example.com/> <http://127.0.0.1/> <https://8.8.8.8/>",
+            false,
+        ),
+    ] {
+        let mut event = message("1234.000001");
+        event["text"] = json!(text);
+        let (message, _, _) = normalise(event, &f.session.counters).unwrap();
+        let queued =
+            prepare_message(f.session.workspace.clone(), message, &f.session.counters).unwrap();
+        // Only the allowed URL should attempt an insert into the closed pool.
+        assert_eq!(
+            handle_msg(queued, &regex, &db, &f.session.counters)
+                .await
+                .is_ok(),
+            succeeds
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]

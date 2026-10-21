@@ -19,5 +19,6 @@ pub use slackbot::*;
 
 mod harvest;
 mod limits;
+mod url_filter;
 
 // EOF

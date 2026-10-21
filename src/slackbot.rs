@@ -26,6 +26,7 @@ use tokio::{
 use crate::{
     harvest::{extract_urls, message_timestamp},
     limits::{Counters, ExpiringCache, log_text},
+    url_filter::UrlFilter,
     *,
 };
 
@@ -50,6 +51,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 struct SlackWorkspace {
     name: String,
+    #[serde(default)]
+    url_blacklist: Vec<String>,
+    #[serde(skip)]
+    url_filter: UrlFilter,
     api_token: String,
     #[serde(default)]
     socket_token: String,
@@ -102,6 +107,8 @@ pub struct Bot {
     recovery: RecoveryConfig,
     url_regex: String,
     url_log_db: String,
+    #[serde(default)]
+    url_blacklist: Vec<String>,
     workspaces: Vec<SlackWorkspace>,
     #[serde(skip)]
     url_re: Option<Regex>,
@@ -110,6 +117,7 @@ pub struct Bot {
 #[derive(Debug)]
 struct Workspace {
     name: String,
+    url_filter: UrlFilter,
     team_id: SlackTeamId,
     #[cfg(feature = "socket-mode")]
     app_id: SlackAppId,
@@ -377,6 +385,14 @@ impl Bot {
                 }
             }
         }
+        let global_filter = UrlFilter::compile(&bot.url_blacklist, "global")?;
+        for workspace in &mut bot.workspaces {
+            workspace.url_filter = UrlFilter::compile(
+                &workspace.url_blacklist,
+                &format!("workspace {}", workspace.name),
+            )?;
+            workspace.url_filter.include(&global_filter);
+        }
         bot.url_log_db
             .parse::<sqlx::postgres::PgConnectOptions>()
             .context("invalid URL database configuration")?;
@@ -542,6 +558,10 @@ async fn handle_msg(
             "*** on {channel} detected url: {}",
             log_text(&record.url, 2048)
         );
+        if let Err(reason) = message.workspace.url_filter.check(&record.url).await {
+            info!("URL insert skipped on {channel}: {reason:#}");
+            continue;
+        }
         if message.dry_run {
             info!("Dry run: URL insert skipped");
             continue;
@@ -605,4 +625,65 @@ fn slack_user_profile_nick(profile: &SlackUserProfile) -> Option<String> {
 
 fn slack_user_fallback(user_id: &SlackUserId) -> String {
     log_text(&format!("<@{}>", user_id.0), 256)
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn config_combines_global_and_workspace_rules_without_crossing_workspaces() {
+        let socket = cfg!(feature = "socket-mode");
+        let config = serde_json::json!({
+            "url_regex": "<(https?://[^>]+)>", "url_log_db": "postgres:///url",
+            "url_blacklist": ["1.1.1.1"],
+            "workspaces": [
+                {"name": "one", "api_token": "xoxc-one", "cookie": "d=test",
+                 "socket_token": if socket { "xapp-one" } else { "" }, "url_blacklist": ["8.8.8.8"]},
+                {"name": "two", "api_token": "xoxc-two", "cookie": "d=test",
+                 "socket_token": if socket { "xapp-two" } else { "" }}
+            ]
+        });
+        let bot = Bot::from_config(&serde_json::to_vec(&config).unwrap()).unwrap();
+        for workspace in &bot.workspaces {
+            assert!(
+                workspace
+                    .url_filter
+                    .check("https://1.1.1.1/")
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            bot.workspaces[0]
+                .url_filter
+                .check("https://8.8.8.8/")
+                .await
+                .is_err()
+        );
+        assert!(
+            bot.workspaces[1]
+                .url_filter
+                .check("https://8.8.8.8/")
+                .await
+                .is_ok()
+        );
+
+        let mut bad = config.clone();
+        bad["url_blacklist"] = serde_json::json!(["https://example.com"]);
+        assert!(
+            Bot::from_config(&serde_json::to_vec(&bad).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("global url_blacklist entry 1")
+        );
+        let mut bad = config;
+        bad["workspaces"][1]["url_blacklist"] = serde_json::json!(["*.example.com"]);
+        assert!(
+            Bot::from_config(&serde_json::to_vec(&bad).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("workspace two url_blacklist entry 1")
+        );
+    }
 }

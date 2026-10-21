@@ -104,6 +104,7 @@ impl Workspace {
         );
         Ok(Self {
             name: config.name.clone(),
+            url_filter: config.url_filter.clone(),
             team_id: auth.team_id,
             app_id: bot.bot.app_id.into(),
             client,
@@ -529,6 +530,7 @@ mod tests {
             .with_slack_api_url("http://127.0.0.1:1/api");
         Arc::new(Workspace {
             name: "test".into(),
+            url_filter: UrlFilter::default(),
             team_id: "T1".into(),
             app_id: "A1".into(),
             client: Arc::new(SlackClient::new(connector)),

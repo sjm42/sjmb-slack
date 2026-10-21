@@ -1,9 +1,11 @@
 {
   "url_regex": "<(https?://[^>]+)>",
   "url_log_db": "postgres:///url?sslmode=disable",
+  "url_blacklist": [],
   "workspaces": [
     {
       "name": "foo",
+      "url_blacklist": [],
       "api_token": "abc-123",
       "socket_token": "xyz-321"
     }
