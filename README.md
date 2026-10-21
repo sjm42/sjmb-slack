@@ -100,8 +100,8 @@ out, or if it returns zero or more than 64 addresses. The conservative address p
 it excludes private, loopback, link-local, shared/CGNAT, documentation, multicast, reserved, and IPv6 translation/tunnelling
 ranges. DNS results reflect the bot machine's resolver configuration, including VPN/split DNS.
 
-Exclusion skips only database insertion. Messages and detected URLs still appear in logs, with the exclusion reason at
-INFO (`--verbose`). Excluded URLs count as successfully processed for recovery; temporary DNS failures can therefore
+Exclusion skips only database insertion. Messages and detected URLs still appear in logs, with every exclusion reason
+at WARN (`--verbose`). Excluded URLs count as successfully processed for recovery; temporary DNS failures can therefore
 lose otherwise acceptable URLs. Live events, recovered history/thread replies, and dry runs use the same policy.
 Existing rows are not removed, and removing a rule does not replay previously excluded messages. No HTTP request or
 redirect following is performed. Downstream fetchers must still check their own DNS results and redirect destinations.

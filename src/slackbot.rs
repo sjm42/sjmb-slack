@@ -559,7 +559,7 @@ async fn handle_msg(
             log_text(&record.url, 2048)
         );
         if let Err(reason) = message.workspace.url_filter.check(&record.url).await {
-            info!("URL insert skipped on {channel}: {reason:#}");
+            warn!("URL insert skipped on {channel}: {reason:#}");
             continue;
         }
         if message.dry_run {
